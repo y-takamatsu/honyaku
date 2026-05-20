@@ -368,15 +368,12 @@ if (savedModel) modelSelect.value = savedModel;
 modelSelect.addEventListener("change", () => localStorage.setItem("lh_model", modelSelect.value));
 
 // ---- VAD（音声区切り検出）パラメータ ----
-const VAD_SAMPLE_RATE = 16000;
-const VAD_FRAME_SIZE = 4096;
-const VAD_FRAME_MS = VAD_FRAME_SIZE / VAD_SAMPLE_RATE * 1000; // ~256ms
+const WHISPER_TARGET_RATE = 16000;  // Whisperが期待するサンプルレート
+const VAD_FRAME_SIZE = 4096;        // ScriptProcessorバッファサイズ
 const VAD_SILENCE_FLUSH_MS = 600;   // この長さの無音で文を区切る
 const VAD_MIN_SPEECH_MS = 400;      // これ未満は無視（ノイズ対策）
 const VAD_MAX_SPEECH_MS = 12000;    // 長すぎる発話は強制区切り
-const VAD_SILENCE_FLUSH_FRAMES = Math.ceil(VAD_SILENCE_FLUSH_MS / VAD_FRAME_MS);
-const VAD_MIN_SPEECH_FRAMES    = Math.ceil(VAD_MIN_SPEECH_MS / VAD_FRAME_MS);
-const VAD_MAX_SPEECH_FRAMES    = Math.ceil(VAD_MAX_SPEECH_MS / VAD_FRAME_MS);
+let vadFrameMs = 0;                 // 実際のサンプルレートから setupVAD で算出
 
 let vadThreshold = 0.015;
 function applyVadThreshold() {
@@ -397,8 +394,8 @@ vadThresholdSlider.addEventListener("input", applyVadThreshold);
 
 let speechBuffer = [];
 let speechActive = false;
-let speechFrameCount = 0;
-let silenceFrameCount = 0;
+let speechMs = 0;
+let silenceMs = 0;
 
 // ---- 状態表示 ----
 function setStatus(text, dotClass) {
@@ -504,11 +501,11 @@ clearBtn.addEventListener("click", () => {
 
 // ---- VAD（無音検出による文区切り）----
 function setupVAD() {
-  try {
-    audioCtx = new AudioContext({ sampleRate: VAD_SAMPLE_RATE });
-  } catch (_) {
-    audioCtx = new AudioContext();
-  }
+  // 環境依存のデフォルトサンプルレートを使う（要求しても無視されることがあるため）
+  audioCtx = new AudioContext();
+  vadFrameMs = (VAD_FRAME_SIZE / audioCtx.sampleRate) * 1000;
+  console.log("[VAD] AudioContext sample rate:", audioCtx.sampleRate, "Hz, frame:", vadFrameMs.toFixed(1), "ms");
+
   sourceNode = audioCtx.createMediaStreamSource(stream);
   processorNode = audioCtx.createScriptProcessor(VAD_FRAME_SIZE, 1, 1);
   muteGainNode = audioCtx.createGain();
@@ -516,13 +513,28 @@ function setupVAD() {
 
   speechBuffer = [];
   speechActive = false;
-  speechFrameCount = 0;
-  silenceFrameCount = 0;
+  speechMs = 0;
+  silenceMs = 0;
 
   processorNode.onaudioprocess = onAudioFrame;
   sourceNode.connect(processorNode);
   processorNode.connect(muteGainNode);
   muteGainNode.connect(audioCtx.destination);
+}
+
+function resampleLinear(input, fromRate, toRate) {
+  if (fromRate === toRate) return input;
+  const ratio = fromRate / toRate;
+  const outLength = Math.floor(input.length / ratio);
+  const output = new Float32Array(outLength);
+  for (let i = 0; i < outLength; i++) {
+    const srcIdx = i * ratio;
+    const idx0 = Math.floor(srcIdx);
+    const idx1 = Math.min(idx0 + 1, input.length - 1);
+    const frac = srcIdx - idx0;
+    output[i] = input[idx0] * (1 - frac) + input[idx1] * frac;
+  }
+  return output;
 }
 
 let _lastMeterUpdate = 0;
@@ -552,20 +564,20 @@ function onAudioFrame(e) {
     if (!speechActive) {
       speechActive = true;
       speechBuffer = [];
-      speechFrameCount = 0;
+      speechMs = 0;
     }
-    silenceFrameCount = 0;
-    speechFrameCount++;
+    silenceMs = 0;
+    speechMs += vadFrameMs;
     speechBuffer.push(new Float32Array(input));
-    if (speechFrameCount >= VAD_MAX_SPEECH_FRAMES) {
+    if (speechMs >= VAD_MAX_SPEECH_MS) {
       flushSpeech(); // 長すぎる発話を強制区切り
     }
   } else if (speechActive) {
     // 末尾の無音も含めて溜める（語尾切れ防止）
     speechBuffer.push(new Float32Array(input));
-    speechFrameCount++;
-    silenceFrameCount++;
-    if (silenceFrameCount >= VAD_SILENCE_FLUSH_FRAMES) {
+    speechMs += vadFrameMs;
+    silenceMs += vadFrameMs;
+    if (silenceMs >= VAD_SILENCE_FLUSH_MS) {
       flushSpeech();
     }
   }
@@ -574,12 +586,12 @@ function onAudioFrame(e) {
 function flushSpeech() {
   if (!speechActive) return;
   const buf = speechBuffer;
-  const frames = speechFrameCount;
+  const ms = speechMs;
   speechActive = false;
   speechBuffer = [];
-  speechFrameCount = 0;
-  silenceFrameCount = 0;
-  if (frames < VAD_MIN_SPEECH_FRAMES) return; // 短すぎる発話は無視
+  speechMs = 0;
+  silenceMs = 0;
+  if (ms < VAD_MIN_SPEECH_MS) return; // 短すぎる発話は無視
 
   // Float32Array を一本に連結
   const totalSamples = buf.reduce((s, b) => s + b.length, 0);
@@ -589,7 +601,13 @@ function flushSpeech() {
     combined.set(b, offset);
     offset += b.length;
   }
-  processSpeech(combined);
+  // Whisperは16kHz想定。実サンプルレートが違うならリサンプル
+  const fromRate = audioCtx ? audioCtx.sampleRate : WHISPER_TARGET_RATE;
+  const audioData = (fromRate === WHISPER_TARGET_RATE)
+    ? combined
+    : resampleLinear(combined, fromRate, WHISPER_TARGET_RATE);
+  console.log(`[VAD] flush: ${ms.toFixed(0)}ms speech, ${combined.length}smp @${fromRate}Hz → ${audioData.length}smp @${WHISPER_TARGET_RATE}Hz`);
+  processSpeech(audioData);
 }
 
 async function processSpeech(audioData) {
@@ -601,6 +619,7 @@ async function processSpeech(audioData) {
       chunk_length_s: 30
     });
     let text = ((result && result.text) || "").trim();
+    console.log("[Whisper] raw:", JSON.stringify(text));
     if (!text || text.length < 2) return;
     if (/^\[.*\]$/.test(text)) return;
     if (/^\(.*\)$/.test(text)) return;
@@ -644,8 +663,8 @@ function teardownVAD() {
   }
   speechBuffer = [];
   speechActive = false;
-  speechFrameCount = 0;
-  silenceFrameCount = 0;
+  speechMs = 0;
+  silenceMs = 0;
 }
 
 // ---- 開始・停止 ----
