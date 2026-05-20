@@ -219,7 +219,7 @@
         </div>
       </div>
       <div class="step">
-        <b>STEP 3</b>: Zoom音声が流れると、5秒ごとに字幕が表示されます
+        <b>STEP 3</b>: Zoom音声が流れると、話の切れ目で自動的に字幕が表示されます
         <div class="small" style="margin-top:4px;">「停止」を押すか、画面下の「共有を停止」を押すと終了。</div>
       </div>
       <div class="check-required">
@@ -283,10 +283,10 @@
         <div class="small" style="margin-top:4px;">⚠️ 変更後はページを再読み込みしてから「開始」してください。</div>
       </div>
       <div>
-        <div class="small" style="margin-bottom:4px;">チャンクサイズ（短いほど反応が速い・長いほど文がまとまる）</div>
+        <div class="small" style="margin-bottom:4px;">音声検出の感度（小さい=敏感・拾いやすい / 大きい=鈍感・誤検出が減る）</div>
         <div class="controls">
-          <input type="range" id="chunkMs" min="1500" max="5000" step="500" value="3000" style="width:240px;">
-          <span id="chunkMsVal">3.0秒</span>
+          <input type="range" id="vadThreshold" min="0.005" max="0.050" step="0.005" value="0.015" style="width:240px;">
+          <span id="vadThresholdVal">0.015</span>
         </div>
       </div>
       <div>
@@ -315,14 +315,16 @@ const statusDot = $("statusDot"), statusText = $("statusText");
 const progressBar = $("progressBar"), progressFill = $("progressFill");
 const history = $("history"), emailInput = $("email");
 const modelSelect = $("modelSelect");
-const chunkMsSlider = $("chunkMs"), chunkMsVal = $("chunkMsVal");
+const vadThresholdSlider = $("vadThreshold"), vadThresholdValEl = $("vadThresholdVal");
 
 let transcriber = null;
 let modelLoading = false;
 let isListening = false;
 let stream = null;
-let currentRecorder = null;
 let audioCtx = null;
+let sourceNode = null;
+let processorNode = null;
+let muteGainNode = null;
 
 // ---- ブラウザサポートチェック ----
 if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
@@ -351,17 +353,32 @@ const savedModel = localStorage.getItem("lh_model");
 if (savedModel) modelSelect.value = savedModel;
 modelSelect.addEventListener("change", () => localStorage.setItem("lh_model", modelSelect.value));
 
-// ---- チャンクサイズ ----
-let CHUNK_MS = 3000;
-function applyChunkMs() {
-  CHUNK_MS = parseInt(chunkMsSlider.value, 10);
-  chunkMsVal.textContent = (CHUNK_MS / 1000).toFixed(1) + "秒";
-  localStorage.setItem("lh_chunkMs", chunkMsSlider.value);
+// ---- VAD（音声区切り検出）パラメータ ----
+const VAD_SAMPLE_RATE = 16000;
+const VAD_FRAME_SIZE = 4096;
+const VAD_FRAME_MS = VAD_FRAME_SIZE / VAD_SAMPLE_RATE * 1000; // ~256ms
+const VAD_SILENCE_FLUSH_MS = 600;   // この長さの無音で文を区切る
+const VAD_MIN_SPEECH_MS = 400;      // これ未満は無視（ノイズ対策）
+const VAD_MAX_SPEECH_MS = 12000;    // 長すぎる発話は強制区切り
+const VAD_SILENCE_FLUSH_FRAMES = Math.ceil(VAD_SILENCE_FLUSH_MS / VAD_FRAME_MS);
+const VAD_MIN_SPEECH_FRAMES    = Math.ceil(VAD_MIN_SPEECH_MS / VAD_FRAME_MS);
+const VAD_MAX_SPEECH_FRAMES    = Math.ceil(VAD_MAX_SPEECH_MS / VAD_FRAME_MS);
+
+let vadThreshold = 0.015;
+function applyVadThreshold() {
+  vadThreshold = parseFloat(vadThresholdSlider.value);
+  vadThresholdValEl.textContent = vadThreshold.toFixed(3);
+  localStorage.setItem("lh_vadThreshold", vadThresholdSlider.value);
 }
-const savedChunk = localStorage.getItem("lh_chunkMs");
-if (savedChunk) chunkMsSlider.value = savedChunk;
-applyChunkMs();
-chunkMsSlider.addEventListener("input", applyChunkMs);
+const savedVad = localStorage.getItem("lh_vadThreshold");
+if (savedVad) vadThresholdSlider.value = savedVad;
+applyVadThreshold();
+vadThresholdSlider.addEventListener("input", applyVadThreshold);
+
+let speechBuffer = [];
+let speechActive = false;
+let speechFrameCount = 0;
+let silenceFrameCount = 0;
 
 // ---- 状態表示 ----
 function setStatus(text, dotClass) {
@@ -465,73 +482,85 @@ clearBtn.addEventListener("click", () => {
   history.innerHTML = '<div class="small">まだありません</div>';
 });
 
-// ---- 音声処理ヘルパー ----
-async function blobToFloat32Mono16k(blob) {
-  if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 16000 });
-  const arrayBuffer = await blob.arrayBuffer();
-  let audioBuffer;
+// ---- VAD（無音検出による文区切り）----
+function setupVAD() {
   try {
-    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-  } catch (e) {
-    return null;
+    audioCtx = new AudioContext({ sampleRate: VAD_SAMPLE_RATE });
+  } catch (_) {
+    audioCtx = new AudioContext();
   }
-  let data;
-  if (audioBuffer.numberOfChannels === 1) {
-    data = audioBuffer.getChannelData(0);
-  } else {
-    const ch0 = audioBuffer.getChannelData(0);
-    const ch1 = audioBuffer.getChannelData(1);
-    data = new Float32Array(ch0.length);
-    for (let i = 0; i < ch0.length; i++) data[i] = (ch0[i] + ch1[i]) / 2;
-  }
-  return new Float32Array(data);
+  sourceNode = audioCtx.createMediaStreamSource(stream);
+  processorNode = audioCtx.createScriptProcessor(VAD_FRAME_SIZE, 1, 1);
+  muteGainNode = audioCtx.createGain();
+  muteGainNode.gain.value = 0; // ScriptProcessor は destination 接続必要だが、音はミュート
+
+  speechBuffer = [];
+  speechActive = false;
+  speechFrameCount = 0;
+  silenceFrameCount = 0;
+
+  processorNode.onaudioprocess = onAudioFrame;
+  sourceNode.connect(processorNode);
+  processorNode.connect(muteGainNode);
+  muteGainNode.connect(audioCtx.destination);
 }
 
-function isMostlySilent(data) {
-  let sum = 0;
-  const step = Math.max(1, Math.floor(data.length / 2000));
-  let count = 0;
-  for (let i = 0; i < data.length; i += step) {
-    sum += Math.abs(data[i]);
-    count++;
-  }
-  return (sum / count) < 0.005;
-}
+function onAudioFrame(e) {
+  if (!isListening) return;
+  const input = e.inputBuffer.getChannelData(0);
+  // RMS（音量）を計算
+  let sumSq = 0;
+  for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
+  const rms = Math.sqrt(sumSq / input.length);
+  const isSpeech = rms > vadThreshold;
 
-// ---- チャンク録音ループ ----
-function recordChunk() {
-  return new Promise((resolve) => {
-    let mimeType = "";
-    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
-    for (const c of candidates) {
-      if (MediaRecorder.isTypeSupported(c)) { mimeType = c; break; }
+  if (isSpeech) {
+    if (!speechActive) {
+      speechActive = true;
+      speechBuffer = [];
+      speechFrameCount = 0;
     }
-    const recorder = mimeType
-      ? new MediaRecorder(stream, { mimeType })
-      : new MediaRecorder(stream);
-    currentRecorder = recorder;
-    const chunks = [];
-    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
-      resolve(blob);
-    };
-    recorder.onerror = () => resolve(null);
-    recorder.start();
-    setTimeout(() => {
-      if (recorder.state === "recording") {
-        try { recorder.stop(); } catch (_) {}
-      }
-    }, CHUNK_MS);
-  });
+    silenceFrameCount = 0;
+    speechFrameCount++;
+    speechBuffer.push(new Float32Array(input));
+    if (speechFrameCount >= VAD_MAX_SPEECH_FRAMES) {
+      flushSpeech(); // 長すぎる発話を強制区切り
+    }
+  } else if (speechActive) {
+    // 末尾の無音も含めて溜める（語尾切れ防止）
+    speechBuffer.push(new Float32Array(input));
+    speechFrameCount++;
+    silenceFrameCount++;
+    if (silenceFrameCount >= VAD_SILENCE_FLUSH_FRAMES) {
+      flushSpeech();
+    }
+  }
 }
 
-async function processChunk(blob) {
-  if (!blob || blob.size < 1500) return;
+function flushSpeech() {
+  if (!speechActive) return;
+  const buf = speechBuffer;
+  const frames = speechFrameCount;
+  speechActive = false;
+  speechBuffer = [];
+  speechFrameCount = 0;
+  silenceFrameCount = 0;
+  if (frames < VAD_MIN_SPEECH_FRAMES) return; // 短すぎる発話は無視
+
+  // Float32Array を一本に連結
+  const totalSamples = buf.reduce((s, b) => s + b.length, 0);
+  const combined = new Float32Array(totalSamples);
+  let offset = 0;
+  for (const b of buf) {
+    combined.set(b, offset);
+    offset += b.length;
+  }
+  processSpeech(combined);
+}
+
+async function processSpeech(audioData) {
+  if (!transcriber) return;
   try {
-    const audioData = await blobToFloat32Mono16k(blob);
-    if (!audioData || audioData.length < 16000) return;
-    if (isMostlySilent(audioData)) return;
     const result = await transcriber(audioData, {
       language: "english",
       task: "transcribe",
@@ -556,16 +585,33 @@ async function processChunk(blob) {
       addHistory(text, "(翻訳オフ)");
     }
   } catch (e) {
-    console.error("processChunk error:", e);
+    console.error("processSpeech error:", e);
   }
 }
 
-async function recordLoop() {
-  while (isListening) {
-    const blob = await recordChunk();
-    if (!isListening) break;
-    processChunk(blob);
+function teardownVAD() {
+  if (speechActive) flushSpeech();
+  if (processorNode) {
+    try { processorNode.disconnect(); } catch (_) {}
+    processorNode.onaudioprocess = null;
+    processorNode = null;
   }
+  if (muteGainNode) {
+    try { muteGainNode.disconnect(); } catch (_) {}
+    muteGainNode = null;
+  }
+  if (sourceNode) {
+    try { sourceNode.disconnect(); } catch (_) {}
+    sourceNode = null;
+  }
+  if (audioCtx) {
+    audioCtx.close().catch(() => {});
+    audioCtx = null;
+  }
+  speechBuffer = [];
+  speechActive = false;
+  speechFrameCount = 0;
+  silenceFrameCount = 0;
 }
 
 // ---- 開始・停止 ----
@@ -601,14 +647,12 @@ async function startListening() {
   };
   isListening = true;
   updateMicUI();
-  recordLoop();
+  setupVAD();
 }
 
 function stopListening() {
   isListening = false;
-  if (currentRecorder && currentRecorder.state === "recording") {
-    try { currentRecorder.stop(); } catch (_) {}
-  }
+  teardownVAD();
   if (stream) {
     stream.getTracks().forEach(t => t.stop());
     stream = null;
@@ -620,7 +664,7 @@ function updateMicUI() {
   if (isListening) {
     micBtn.textContent = "⏹ 停止";
     micBtn.classList.add("listening");
-    setStatus(`聞き取り中…（${(CHUNK_MS/1000).toFixed(1)}秒ごとに字幕が更新されます）`, "on");
+    setStatus("聞き取り中…（話の切れ目で自動的に字幕が出ます）", "on");
   } else {
     micBtn.textContent = "🎧 聞き取り開始";
     micBtn.classList.remove("listening");
