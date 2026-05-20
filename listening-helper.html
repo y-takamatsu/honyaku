@@ -240,6 +240,18 @@
     <span id="statusText">待機中（AIモデルは「開始」時に読み込みます）</span>
   </div>
   <div id="progressBar" class="progress-bar"><div id="progressFill" style="width:0%;"></div></div>
+  <div id="levelMeter" style="display:none; margin-top:10px; font-size:0.82rem; color:var(--muted);">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <span>🎚 現在の音量:</span>
+      <div style="flex:1; min-width:200px; max-width:380px; height:12px; background:var(--panel2); border-radius:6px; overflow:hidden; position:relative;">
+        <div id="levelFill" style="height:100%; width:0%; background:#22c55e; transition:width 60ms, background-color 60ms;"></div>
+        <div id="thresholdLine" style="position:absolute; top:0; bottom:0; width:2px; background:#fbbf24; left:0%;"></div>
+      </div>
+      <span style="font-family:monospace; font-size:0.78rem; min-width:60px;">RMS <span id="levelVal">0.000</span></span>
+      <span style="font-size:0.75rem;">閾値 <span id="thresholdDisplay">0.005</span> (🟡)</span>
+    </div>
+    <div class="small" style="margin-top:4px; font-size:0.75rem;">バーが🟡を超えると「話している」と判定 → 話の切れ目で字幕生成</div>
+  </div>
 </div>
 
 <!-- 英語 -->
@@ -285,8 +297,8 @@
       <div>
         <div class="small" style="margin-bottom:4px;">音声検出の感度（小さい=敏感・拾いやすい / 大きい=鈍感・誤検出が減る）</div>
         <div class="controls">
-          <input type="range" id="vadThreshold" min="0.005" max="0.050" step="0.005" value="0.015" style="width:240px;">
-          <span id="vadThresholdVal">0.015</span>
+          <input type="range" id="vadThreshold" min="0.001" max="0.030" step="0.001" value="0.005" style="width:240px;">
+          <span id="vadThresholdVal">0.005</span>
         </div>
       </div>
       <div>
@@ -313,6 +325,8 @@ const autoTranslate = $("autoTranslate");
 const fontSize = $("fontSize"), fontVal = $("fontVal");
 const statusDot = $("statusDot"), statusText = $("statusText");
 const progressBar = $("progressBar"), progressFill = $("progressFill");
+const levelMeter = $("levelMeter"), levelFill = $("levelFill"), levelVal = $("levelVal");
+const thresholdLine = $("thresholdLine"), thresholdDisplay = $("thresholdDisplay");
 const history = $("history"), emailInput = $("email");
 const modelSelect = $("modelSelect");
 const vadThresholdSlider = $("vadThreshold"), vadThresholdValEl = $("vadThresholdVal");
@@ -368,6 +382,12 @@ let vadThreshold = 0.015;
 function applyVadThreshold() {
   vadThreshold = parseFloat(vadThresholdSlider.value);
   vadThresholdValEl.textContent = vadThreshold.toFixed(3);
+  if (thresholdDisplay) thresholdDisplay.textContent = vadThreshold.toFixed(3);
+  if (thresholdLine) {
+    // メーターの最大スケール 0.03 に対して閾値位置を計算
+    const pct = Math.min(100, (vadThreshold / 0.03) * 100);
+    thresholdLine.style.left = pct + "%";
+  }
   localStorage.setItem("lh_vadThreshold", vadThresholdSlider.value);
 }
 const savedVad = localStorage.getItem("lh_vadThreshold");
@@ -505,6 +525,19 @@ function setupVAD() {
   muteGainNode.connect(audioCtx.destination);
 }
 
+let _lastMeterUpdate = 0;
+function updateLevelMeter(rms) {
+  const now = performance.now();
+  if (now - _lastMeterUpdate < 80) return;
+  _lastMeterUpdate = now;
+  if (levelVal) levelVal.textContent = rms.toFixed(4);
+  if (levelFill) {
+    const pct = Math.min(100, (rms / 0.03) * 100);
+    levelFill.style.width = pct + "%";
+    levelFill.style.background = rms > vadThreshold ? "#ef4444" : "#22c55e";
+  }
+}
+
 function onAudioFrame(e) {
   if (!isListening) return;
   const input = e.inputBuffer.getChannelData(0);
@@ -512,6 +545,7 @@ function onAudioFrame(e) {
   let sumSq = 0;
   for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
   const rms = Math.sqrt(sumSq / input.length);
+  updateLevelMeter(rms);
   const isSpeech = rms > vadThreshold;
 
   if (isSpeech) {
@@ -647,6 +681,7 @@ async function startListening() {
   };
   isListening = true;
   updateMicUI();
+  if (levelMeter) levelMeter.style.display = "block";
   setupVAD();
 }
 
@@ -657,6 +692,9 @@ function stopListening() {
     stream.getTracks().forEach(t => t.stop());
     stream = null;
   }
+  if (levelMeter) levelMeter.style.display = "none";
+  if (levelFill) levelFill.style.width = "0%";
+  if (levelVal) levelVal.textContent = "0.000";
   updateMicUI();
 }
 
