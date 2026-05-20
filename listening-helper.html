@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>リスニング補助 — 英語→日本語字幕</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a212b;
+    --panel2: #232d3a;
+    --border: #313d4d;
+    --text: #e6edf3;
+    --muted: #8b97a6;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --green: #22c55e;
+    --red: #ef4444;
+    --subtitle: #fff8dc;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 20px;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 18px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .label {
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .mic-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font-family: inherit;
+    font-size: 0.95rem;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    cursor: pointer;
+    background: var(--panel2);
+    color: var(--text);
+    transition: background 0.15s, transform 0.05s;
+  }
+  button:hover { background: var(--border); }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .mic-btn {
+    background: var(--accent);
+    font-size: 1.1rem;
+    font-weight: 600;
+    padding: 14px 28px;
+    flex: 1;
+    min-width: 200px;
+  }
+  .mic-btn:hover { background: var(--accent-hover); }
+  .mic-btn.listening { background: var(--red); }
+  .mic-btn.listening:hover { background: #dc2626; }
+
+  .en-live {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 0.95rem;
+    color: var(--muted);
+    min-height: 56px;
+    font-style: italic;
+  }
+  .en-live.has-text { color: var(--text); font-style: normal; }
+
+  .ja-subtitle {
+    background: linear-gradient(135deg, #1c2533, #18202c);
+    border: 2px solid var(--accent);
+    border-radius: 14px;
+    padding: 28px 24px;
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.4;
+    min-height: 140px;
+    color: var(--subtitle);
+    word-break: break-word;
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.15);
+  }
+  .ja-subtitle.empty { color: var(--muted); font-weight: 400; font-size: 1rem; font-style: italic; }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .controls { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; font-size: 0.88rem; }
+  .controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  input[type="range"] { accent-color: var(--accent); }
+  input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+  input[type="email"] {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  .status { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--red); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+  .history { max-height: 320px; overflow-y: auto; }
+  .hist-item {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 0;
+    font-size: 0.92rem;
+  }
+  .hist-item:last-child { border-bottom: none; }
+  .hist-en { color: var(--muted); font-size: 0.85rem; font-style: italic; margin-bottom: 2px; }
+  .hist-ja { color: var(--text); }
+  .warn {
+    background: #3a2a12;
+    border: 1px solid #6b4e1f;
+    color: #fbbf24;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 14px;
+  }
+  details summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 0.92rem;
+    font-weight: 600;
+    padding: 4px 0;
+  }
+  details[open] summary { margin-bottom: 10px; }
+  .small { font-size: 0.82rem; color: var(--muted); line-height: 1.8; }
+  .setup-step {
+    background: var(--panel2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    font-size: 0.88rem;
+  }
+  .setup-step b { color: var(--accent); }
+  code {
+    background: #0a0e13;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: Consolas, monospace;
+    font-size: 0.85em;
+    color: #fbbf24;
+  }
+  .setup-panel { border-color: #6b4e1f; background: #1f1810; }
+</style>
+</head>
+<body>
+
+<h1>🎧 リスニング補助</h1>
+<div class="sub">Zoom会議で相手の英語をリアルタイムに日本語字幕として表示。聞き取りに困ったときの補助に。</div>
+
+<div id="browserWarn" class="warn" style="display:none;">
+  ⚠️ お使いのブラウザは音声認識に対応していません。<strong>Google Chrome</strong> で開いてください。
+</div>
+
+<!-- セットアップ手順 -->
+<div class="panel setup-panel">
+  <details id="setupDetails">
+    <summary>🔧 初回セットアップ手順（1回だけ・必読）</summary>
+    <div style="margin-top:12px;">
+      <div class="small" style="margin-bottom:14px;">
+        Zoomの音声をブラウザに取り込むため、無料の仮想オーディオツール <b>VoiceMeeter Banana</b> をインストールします。
+      </div>
+
+      <div class="setup-step">
+        <b>STEP 1</b>: <a href="https://vb-audio.com/Voicemeeter/banana.htm" target="_blank" style="color:#fbbf24;">VoiceMeeter Banana</a> をダウンロード・インストール → PC再起動
+      </div>
+      <div class="setup-step">
+        <b>STEP 2</b>: VoiceMeeter Banana を起動 → 右上の <code>A1</code> をクリックして、自分のヘッドホン/スピーカーを選ぶ
+      </div>
+      <div class="setup-step">
+        <b>STEP 3</b>: 1番目の入力ストリップ「VoiceMeeter Input」で、<code>A1</code> と <code>B1</code> の両方が点灯していることを確認
+      </div>
+      <div class="setup-step">
+        <b>STEP 4</b>: Windowsの音声設定 → 既定の出力デバイスを <code>VoiceMeeter Input (VB-Audio VoiceMeeter VAIO)</code> に変更
+      </div>
+      <div class="setup-step">
+        <b>STEP 5</b>: Chromeを開き直す → このページで「聞き取り開始」 → マイクの選択ダイアログで <code>VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)</code> を選択
+      </div>
+      <div class="setup-step" style="background:#1a3a1a;">
+        <b>✅ 完了</b>: これでZoomの音はあなたのヘッドホンにも届き、同時にこのアプリにも流れ込みます。次回からはSTEP 5だけでOK。
+      </div>
+
+      <div class="small" style="margin-top:14px; padding:10px; background:#2a1f1a; border-radius:6px;">
+        💡 <b>うまく動かないとき</b>: Chromeのアドレスバー左の鍵マーク → サイトの設定 → マイク → 「VoiceMeeter Output」を選択してページを再読み込み。
+      </div>
+    </div>
+  </details>
+</div>
+
+<!-- マイク操作 -->
+<div class="panel">
+  <div class="mic-row">
+    <button id="micBtn" class="mic-btn">🎧 聞き取り開始</button>
+    <button id="clearBtn">クリア</button>
+  </div>
+  <div class="status"><span id="statusDot" class="dot"></span> <span id="statusText">待機中</span></div>
+</div>
+
+<!-- 英語（小さい・リアルタイム） -->
+<div class="panel">
+  <div class="label">🇺🇸 英語（聞き取り中の音声）</div>
+  <div id="enLive" class="en-live">英語の音声が流れると、ここに表示されます…</div>
+</div>
+
+<!-- 日本語字幕（大きい・メイン） -->
+<div class="panel">
+  <div class="label">
+    🇯🇵 日本語字幕（翻訳結果）
+    <div class="controls" style="margin-left:auto;">
+      <label>字幕サイズ <input type="range" id="fontSize" min="1.4" max="3.2" step="0.1" value="2"> <span id="fontVal">2.0</span></label>
+    </div>
+  </div>
+  <div id="jaSubtitle" class="ja-subtitle empty">ここに日本語字幕が表示されます</div>
+  <div class="controls" style="margin-top:12px;">
+    <label><input type="checkbox" id="autoTranslate" checked> 自動翻訳（聞き取れるたび）</label>
+  </div>
+</div>
+
+<!-- 履歴 -->
+<div class="panel">
+  <div class="label">🕘 履歴（英・日ペア）</div>
+  <div id="history" class="history"><div class="small">まだありません</div></div>
+</div>
+
+<!-- 設定 -->
+<div class="panel">
+  <details>
+    <summary>⚙️ その他の設定</summary>
+    <div style="margin-top:12px;">
+      <div class="small" style="margin-bottom:6px;">
+        翻訳は無料の MyMemory API を使用。リスニングは消費が多いので、メール登録（1日上限が大幅増）を推奨します。
+      </div>
+      <input type="email" id="email" placeholder="任意: あなたのメールアドレス" style="width:280px;">
+    </div>
+  </details>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const micBtn = $("micBtn"), clearBtn = $("clearBtn");
+  const enLive = $("enLive"), jaSubtitle = $("jaSubtitle");
+  const autoTranslate = $("autoTranslate");
+  const fontSize = $("fontSize"), fontVal = $("fontVal");
+  const statusDot = $("statusDot"), statusText = $("statusText");
+  const history = $("history"), emailInput = $("email");
+
+  let listening = false;
+  let manualStop = false;
+
+  // ---- 字幕サイズ ----
+  function applyFontSize() {
+    jaSubtitle.style.fontSize = fontSize.value + "rem";
+    fontVal.textContent = Number(fontSize.value).toFixed(1);
+    localStorage.setItem("lh_fontSize", fontSize.value);
+  }
+  const savedFont = localStorage.getItem("lh_fontSize");
+  if (savedFont) fontSize.value = savedFont;
+  applyFontSize();
+  fontSize.addEventListener("input", applyFontSize);
+
+  // ---- メール記憶 ----
+  emailInput.value = localStorage.getItem("lh_email") || "";
+  emailInput.addEventListener("change", () => localStorage.setItem("lh_email", emailInput.value.trim()));
+
+  // ---- 翻訳（MyMemory API・英→日）----
+  async function translate(text) {
+    const q = text.trim();
+    if (!q) return "";
+    let url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(q) + "&langpair=en|ja";
+    const email = emailInput.value.trim();
+    if (email) url += "&de=" + encodeURIComponent(email);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    let out = (data.responseData && data.responseData.translatedText) || "";
+    if (/MYMEMORY WARNING|QUERY LENGTH LIMIT|YOU USED ALL AVAILABLE/i.test(out)) {
+      throw new Error("翻訳の無料上限に達した可能性があります。設定でメールを登録すると上限が増えます。");
+    }
+    return out;
+  }
+
+  function setSubtitle(text) {
+    if (text) {
+      jaSubtitle.textContent = text;
+      jaSubtitle.classList.remove("empty");
+    } else {
+      jaSubtitle.textContent = "ここに日本語字幕が表示されます";
+      jaSubtitle.classList.add("empty");
+    }
+  }
+
+  function addHistory(en, ja) {
+    if (history.querySelector(".small")) history.innerHTML = "";
+    const item = document.createElement("div");
+    item.className = "hist-item";
+    const enDiv = document.createElement("div");
+    enDiv.className = "hist-en";
+    enDiv.textContent = en;
+    const jaDiv = document.createElement("div");
+    jaDiv.className = "hist-ja";
+    jaDiv.textContent = ja;
+    item.appendChild(enDiv);
+    item.appendChild(jaDiv);
+    history.prepend(item);
+  }
+
+  async function doTranslate(englishText) {
+    const text = englishText.trim();
+    if (!text) return;
+    try {
+      const ja = await translate(text);
+      setSubtitle(ja);
+      addHistory(text, ja);
+    } catch (e) {
+      setSubtitle("⚠️ " + e.message);
+    }
+  }
+
+  clearBtn.addEventListener("click", () => {
+    enLive.textContent = "英語の音声が流れると、ここに表示されます…";
+    enLive.classList.remove("has-text");
+    setSubtitle("");
+    history.innerHTML = '<div class="small">まだありません</div>';
+  });
+
+  // ---- 音声認識（英語）----
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+
+  if (!SR) {
+    $("browserWarn").style.display = "block";
+    micBtn.disabled = true;
+    micBtn.textContent = "🎧 音声認識は非対応";
+  } else {
+    recognition = new SR();
+    recognition.lang = "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r.isFinal) {
+          const finalText = r[0].transcript.trim();
+          if (finalText) {
+            enLive.textContent = finalText;
+            enLive.classList.add("has-text");
+            if (autoTranslate.checked) doTranslate(finalText);
+          }
+        } else {
+          interim += r[0].transcript;
+        }
+      }
+      if (interim) {
+        enLive.textContent = interim + " …";
+        enLive.classList.add("has-text");
+      }
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        statusText.textContent = "マイクの使用が許可されていません。Chromeのマイク選択でVoiceMeeter Outputを選んでください。";
+        stopListening();
+      } else if (e.error === "no-speech") {
+        statusText.textContent = "音声が検出されていません（Zoom音声がVoiceMeeter経由で流れているか確認）";
+      } else if (e.error === "audio-capture") {
+        statusText.textContent = "音声入力デバイスが見つかりません";
+        stopListening();
+      }
+    };
+
+    recognition.onend = () => {
+      // 連続認識のため、停止指示が無ければ再開
+      if (listening && !manualStop) {
+        try { recognition.start(); } catch (_) {}
+      } else {
+        listening = false;
+        updateMicUI();
+      }
+    };
+  }
+
+  function updateMicUI() {
+    if (listening) {
+      micBtn.textContent = "⏹ 停止";
+      micBtn.classList.add("listening");
+      statusDot.classList.add("on");
+      statusText.textContent = "聞き取り中…相手の英語をお待ちください";
+    } else {
+      micBtn.textContent = "🎧 聞き取り開始";
+      micBtn.classList.remove("listening");
+      statusDot.classList.remove("on");
+      statusText.textContent = "待機中";
+    }
+  }
+
+  function startListening() {
+    if (!recognition || listening) return;
+    manualStop = false;
+    listening = true;
+    try { recognition.start(); } catch (_) {}
+    updateMicUI();
+  }
+
+  function stopListening() {
+    manualStop = true;
+    listening = false;
+    if (recognition) { try { recognition.stop(); } catch (_) {} }
+    updateMicUI();
+  }
+
+  micBtn.addEventListener("click", () => {
+    if (listening) stopListening();
+    else startListening();
+  });
+
+  // 初回起動時、セットアップ手順を自動展開
+  if (!localStorage.getItem("lh_setupDone")) {
+    $("setupDetails").open = true;
+  }
+  micBtn.addEventListener("click", () => {
+    localStorage.setItem("lh_setupDone", "1");
+  }, { once: true });
+})();
+</script>
+</body>
+</html>
