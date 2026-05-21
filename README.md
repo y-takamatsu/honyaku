@@ -5,6 +5,17 @@ Zoom会議での言語の壁を下げるための補助ツールです。
 
 ---
 
+## 🔗 すぐ使えるURL（Chrome で開くだけ）
+
+| ツール | URL |
+|--------|-----|
+| 🎙️ スピーキング補助 | https://y-takamatsu.github.io/honyaku/speaking-helper.html |
+| 🎧 リスニング補助 | https://y-takamatsu.github.io/honyaku/listening-helper.html |
+
+> **Chrome 専用**です。Edge・Firefox・Safari は未対応。
+
+---
+
 ## 📦 ファイル一覧
 
 | ファイル | 機能 | 説明 |
@@ -22,7 +33,7 @@ Zoom会議での言語の壁を下げるための補助ツールです。
 - Chrome ブラウザのみ（APIキー不要・完全無料）
 
 ### 使い方
-1. `speaking-helper.html` をダブルクリックして Chrome で開く
+1. 上のURLを Chrome で開く
 2. マイクの使用を許可
 3. 「🎤 話し始める」をクリックして日本語で話す
 4. 英語に翻訳されて画面に表示・読み上げされます
@@ -41,7 +52,7 @@ Zoom・YouTube等の英語音声をリアルタイムで日本語字幕に変換
   - 目安：1時間の会議で **約$0.4〜0.6**
 
 ### 使い方
-1. `listening-helper.html` をダブルクリックして Chrome で開く
+1. 上のURLを Chrome で開く
 2. 画面下部の「設定」欄に OpenAI APIキー（`sk-...`）を入力
 3. 「✅ 準備完了にする」をクリック
 4. 「🎧 聞き取り開始」をクリック
