@@ -116,23 +116,6 @@
     }
     #btn-clear:hover { background: #334155; }
 
-    /* ── Guide ── */
-    .guide {
-      background: #1c2640;
-      border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 16px;
-      border: 1px solid #2d4a7a;
-    }
-    .guide h3 { color: #fbbf24; font-size: 0.9rem; margin-bottom: 8px; }
-    .guide ol {
-      padding-left: 18px;
-      color: #94a3b8;
-      font-size: 0.88rem;
-      line-height: 1.9;
-    }
-    .guide .hi { color: #fbbf24; font-weight: 700; }
-
     /* ── No-audio warning ── */
     #no-audio-warning {
       display: none;
@@ -142,58 +125,6 @@
       margin-bottom: 14px;
       font-size: 0.88rem;
       color: #fed7aa;
-    }
-
-    /* ── Processing indicator ── */
-    #processing-indicator {
-      display: flex;          /* 常にスペースを確保（消えてもレイアウト不変） */
-      visibility: hidden;     /* 非表示時は透明にするだけ */
-      align-items: center;
-      gap: 8px;
-      color: #64748b;
-      font-size: 0.85rem;
-      margin-bottom: 12px;
-    }
-    .spinner {
-      width: 14px; height: 14px;
-      border: 2px solid #334155;
-      border-top-color: #38bdf8;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Pipeline steps ── */
-    .pipe-step {
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      background: #0f172a;
-      color: #475569;
-      border: 1px solid #334155;
-      transition: all 0.2s;
-      white-space: nowrap;
-    }
-    .pipe-step.active {
-      background: #0c2a4a;
-      color: #38bdf8;
-      border-color: #38bdf8;
-      box-shadow: 0 0 8px rgba(56,189,248,0.3);
-      animation: pipe-pulse 1s infinite;
-    }
-    .pipe-step.done {
-      background: #052e16;
-      color: #22c55e;
-      border-color: #22c55e;
-    }
-    .pipe-step.skip {
-      background: #1c1917;
-      color: #78716c;
-      border-color: #44403c;
-    }
-    @keyframes pipe-pulse {
-      0%,100% { opacity:1; } 50% { opacity:0.7; }
     }
 
     /* ── Audio meter ── */
@@ -423,49 +354,9 @@
   <button id="btn-clear">🗑 履歴クリア</button>
 </div>
 
-<!-- Guide -->
-<div class="guide">
-  <h3>⚠️ 画面共有の選び方（重要）</h3>
-  <ol>
-    <li>「聞き取り開始」をクリック → 画面共有ダイアログが開きます</li>
-    <li><span class="hi">「画面全体」タブ</span>を選択してください</li>
-    <li><span class="hi">「音声を共有」にチェック ✓</span> ← これを忘れると動きません！</li>
-    <li>「共有」をクリック → 自動で聞き取り＆翻訳が始まります</li>
-    <li>Zoomで相手が話すと数秒後に日本語字幕が表示されます</li>
-  </ol>
-</div>
-
 <!-- No-audio warning -->
 <div id="no-audio-warning">
   ⚠️ 音声トラックが検出されませんでした。もう一度「聞き取り開始」を押して、ダイアログで「<strong>音声を共有</strong>」にチェックを入れてください。
-</div>
-
-<!-- 翻訳エラー警告（Lingva全インスタンス失敗時のみ表示） -->
-<div id="warn-403" style="display:none; background:#1e293b; border-radius:8px; padding:12px 16px; margin-bottom:14px; font-size:0.88rem; color:#94a3b8; border:1px solid #334155;">
-  ⚠️ 翻訳サーバーに接続できません。ネットワークを確認するか、しばらく待ってから再開してください。
-</div>
-
-<!-- Pipeline status -->
-<div id="pipeline-wrap" style="display:none; background:#1e293b; border-radius:10px; padding:14px 16px; border:1px solid #334155; margin-bottom:16px;">
-  <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:10px;">処理パイプライン</div>
-  <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-    <div class="pipe-step" id="ps-record">⏺ 録音</div>
-    <div style="color:#334155">→</div>
-    <div class="pipe-step" id="ps-decode">🎵 WAV変換</div>
-    <div style="color:#334155">→</div>
-    <div class="pipe-step" id="ps-whisper">🤖 Whisper</div>
-    <div style="color:#334155">→</div>
-    <div class="pipe-step" id="ps-translate">🌐 翻訳</div>
-    <div style="margin-left:auto; font-size:0.78rem; color:#64748b;">キュー: <span id="ps-queue">0</span>件 <span id="ps-queue-warn" style="display:none;color:#ef4444;">⚠ 遅延中</span></div>
-  </div>
-  <div id="ps-detail" style="margin-top:8px; font-size:0.82rem; color:#94a3b8; height:18px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></div>
-  <div id="ps-log" style="margin-top:6px; height:72px; overflow-y:auto; font-size:0.75rem; font-family:monospace; color:#475569;"></div>
-</div>
-
-<!-- Processing indicator -->
-<div id="processing-indicator">
-  <div class="spinner"></div>
-  <span>音声を認識・翻訳中…</span>
 </div>
 
 <!-- Audio level meter -->
@@ -612,22 +503,10 @@
   const ttsToggle     = document.getElementById('tts-toggle');
   const noAudioWarn   = document.getElementById('no-audio-warning');
   const meterWrap     = document.getElementById('audio-meter-wrap');
-  const pipelineWrap  = document.getElementById('pipeline-wrap');
-  const psRecord      = document.getElementById('ps-record');
-  const psDecode      = document.getElementById('ps-decode');
-  const psWhisper     = document.getElementById('ps-whisper');
-  const psTranslate   = document.getElementById('ps-translate');
-  const psQueue       = document.getElementById('ps-queue');
-  const psQueueWarn   = document.getElementById('ps-queue-warn');
-  const psDetail      = document.getElementById('ps-detail');
-  const psLog         = document.getElementById('ps-log');
-  let   stepTimer     = null;
-  let   stepStart     = 0;
   const meterBarInner = document.getElementById('meter-bar-inner');
   const meterDb       = document.getElementById('meter-db');
   const meterCanvas   = document.getElementById('meter-canvas');
   const meterCtx      = meterCanvas.getContext('2d');
-  const procIndicator  = document.getElementById('processing-indicator');
   const apiKeyInput    = document.getElementById('api-key-input');
   const btnSaveKey     = document.getElementById('btn-save-key');
   const apiKeyStatus   = document.getElementById('api-key-status');
@@ -652,49 +531,10 @@
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  // ── Pipeline visualizer ─────────────────────────────────────────
-  const allSteps = { record: psRecord, decode: psDecode, whisper: psWhisper, translate: psTranslate };
-
-  function pipeSet(step, state, detail = '') {
-    // state: 'active' | 'done' | 'skip' | 'idle'
-    Object.entries(allSteps).forEach(([k, el]) => {
-      if (k === step) {
-        el.className = 'pipe-step ' + (state === 'idle' ? '' : state);
-      }
-    });
-    if (detail) {
-      psDetail.textContent = detail;
-      pipeLog(detail);
-    }
-    if (state === 'active') {
-      stepStart = Date.now();
-      if (stepTimer) clearInterval(stepTimer);
-      stepTimer = setInterval(() => {
-        const sec = ((Date.now() - stepStart) / 1000).toFixed(1);
-        psDetail.textContent = detail + ` (${sec}秒)`;
-      }, 100);
-    } else {
-      if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
-    }
-    psQueue.textContent = chunkQueue.length;
-    psQueueWarn.style.display = chunkQueue.length > 1 ? 'inline' : 'none';
-  }
-
-  function pipeReset() {
-    Object.values(allSteps).forEach(el => { el.className = 'pipe-step'; });
-    psDetail.textContent = '';
-    if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
-    psQueue.textContent = '0';
-  }
-
-  function pipeLog(msg) {
-    const time = new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    const line = document.createElement('div');
-    line.textContent = `[${time}] ${msg}`;
-    psLog.prepend(line);
-    // keep max 20 lines
-    while (psLog.children.length > 20) psLog.removeChild(psLog.lastChild);
-  }
+  // pipeSet / pipeLog は削除（パイプライン表示廃止）→ console.log に集約
+  function pipeSet(step, state, detail = '') { if (detail) console.debug(`[pipe:${step}:${state}]`, detail); }
+  function pipeReset() {}
+  function pipeLog(msg) { console.debug('[pipe]', msg); }
 
   // ── 日本語読み上げ（Web Speech API）────────────────────────────────
   function speak(text) {
@@ -915,11 +755,8 @@
     audioTracks[0].onended = () => { if (isListening) stopListening(); };
 
     isListening = true;
-    btnStart.style.display     = 'none';
-    btnStop.style.display      = 'block';
-    pipelineWrap.style.display = 'block';
-    pipeReset();
-    pipeLog(`聞き取り開始 — 最大${parseInt(chunkSelect.value)/1000}秒チャンク / OpenAI Whisper API（VAD付き）`);
+    btnStart.style.display = 'none';
+    btnStop.style.display  = 'block';
     setStatus('🟢 聞き取り中…', 'listening');
   }
 
@@ -933,8 +770,6 @@
     sentenceBuffer    = '';
     window.speechSynthesis.cancel();  // 読み上げ中なら止める
     stopMeter();
-    pipeReset();
-    pipelineWrap.style.display = 'none';
     isListening = false;
     btnStart.style.display = 'block';
     btnStop.style.display  = 'none';
@@ -999,13 +834,11 @@
   // ── Process one audio chunk ─────────────────────────────────────
   async function processNextChunk() {
     if (chunkQueue.length === 0) {
-      isProcessingChunk           = false;
-      procIndicator.style.visibility = 'hidden';
+      isProcessingChunk = false;
       return;
     }
 
-    isProcessingChunk           = true;
-    procIndicator.style.visibility = 'visible';
+    isProcessingChunk = true;
 
     // ── キュー溜まり対策: 古いチャンクを捨てて最新1件だけ残す ──
     if (chunkQueue.length > 1) {
