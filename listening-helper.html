@@ -162,6 +162,39 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* ── Pipeline steps ── */
+    .pipe-step {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: #0f172a;
+      color: #475569;
+      border: 1px solid #334155;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .pipe-step.active {
+      background: #0c2a4a;
+      color: #38bdf8;
+      border-color: #38bdf8;
+      box-shadow: 0 0 8px rgba(56,189,248,0.3);
+      animation: pipe-pulse 1s infinite;
+    }
+    .pipe-step.done {
+      background: #052e16;
+      color: #22c55e;
+      border-color: #22c55e;
+    }
+    .pipe-step.skip {
+      background: #1c1917;
+      color: #78716c;
+      border-color: #44403c;
+    }
+    @keyframes pipe-pulse {
+      0%,100% { opacity:1; } 50% { opacity:0.7; }
+    }
+
     /* ── Audio meter ── */
     #audio-meter-wrap {
       display: none;
@@ -392,6 +425,23 @@
   ⚠️ 音声トラックが検出されませんでした。もう一度「聞き取り開始」を押して、ダイアログで「<strong>音声を共有</strong>」にチェックを入れてください。
 </div>
 
+<!-- Pipeline status -->
+<div id="pipeline-wrap" style="display:none; background:#1e293b; border-radius:10px; padding:14px 16px; border:1px solid #334155; margin-bottom:16px;">
+  <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:10px;">処理パイプライン</div>
+  <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+    <div class="pipe-step" id="ps-record">⏺ 録音</div>
+    <div style="color:#334155">→</div>
+    <div class="pipe-step" id="ps-decode">🔓 デコード</div>
+    <div style="color:#334155">→</div>
+    <div class="pipe-step" id="ps-whisper">🤖 Whisper</div>
+    <div style="color:#334155">→</div>
+    <div class="pipe-step" id="ps-translate">🌐 翻訳</div>
+    <div style="margin-left:auto; font-size:0.78rem; color:#64748b;">キュー: <span id="ps-queue">0</span>件</div>
+  </div>
+  <div id="ps-detail" style="margin-top:8px; font-size:0.82rem; color:#94a3b8; min-height:18px;"></div>
+  <div id="ps-log" style="margin-top:8px; max-height:80px; overflow-y:auto; font-size:0.75rem; font-family:monospace; color:#475569;"></div>
+</div>
+
 <!-- Processing indicator -->
 <div id="processing-indicator">
   <div class="spinner"></div>
@@ -515,6 +565,16 @@
   const atToggle      = document.getElementById('auto-translate-toggle');
   const noAudioWarn   = document.getElementById('no-audio-warning');
   const meterWrap     = document.getElementById('audio-meter-wrap');
+  const pipelineWrap  = document.getElementById('pipeline-wrap');
+  const psRecord      = document.getElementById('ps-record');
+  const psDecode      = document.getElementById('ps-decode');
+  const psWhisper     = document.getElementById('ps-whisper');
+  const psTranslate   = document.getElementById('ps-translate');
+  const psQueue       = document.getElementById('ps-queue');
+  const psDetail      = document.getElementById('ps-detail');
+  const psLog         = document.getElementById('ps-log');
+  let   stepTimer     = null;
+  let   stepStart     = 0;
   const meterBarInner = document.getElementById('meter-bar-inner');
   const meterDb       = document.getElementById('meter-db');
   const meterCanvas   = document.getElementById('meter-canvas');
@@ -541,6 +601,49 @@
   function esc(s) {
     return String(s)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Pipeline visualizer ─────────────────────────────────────────
+  const allSteps = { record: psRecord, decode: psDecode, whisper: psWhisper, translate: psTranslate };
+
+  function pipeSet(step, state, detail = '') {
+    // state: 'active' | 'done' | 'skip' | 'idle'
+    Object.entries(allSteps).forEach(([k, el]) => {
+      if (k === step) {
+        el.className = 'pipe-step ' + (state === 'idle' ? '' : state);
+      }
+    });
+    if (detail) {
+      psDetail.textContent = detail;
+      pipeLog(detail);
+    }
+    if (state === 'active') {
+      stepStart = Date.now();
+      if (stepTimer) clearInterval(stepTimer);
+      stepTimer = setInterval(() => {
+        const sec = ((Date.now() - stepStart) / 1000).toFixed(1);
+        psDetail.textContent = detail + ` (${sec}秒)`;
+      }, 100);
+    } else {
+      if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
+    }
+    psQueue.textContent = chunkQueue.length;
+  }
+
+  function pipeReset() {
+    Object.values(allSteps).forEach(el => { el.className = 'pipe-step'; });
+    psDetail.textContent = '';
+    if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
+    psQueue.textContent = '0';
+  }
+
+  function pipeLog(msg) {
+    const time = new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const line = document.createElement('div');
+    line.textContent = `[${time}] ${msg}`;
+    psLog.prepend(line);
+    // keep max 20 lines
+    while (psLog.children.length > 20) psLog.removeChild(psLog.lastChild);
   }
 
   // ── Load Whisper model ──────────────────────────────────────────
@@ -627,6 +730,8 @@
     mediaRecorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 100) {
         chunkQueue.push(e.data);
+        pipeSet('record', 'done', `録音チャンク受信 (${(e.data.size/1024).toFixed(1)} KB)`);
+        psQueue.textContent = chunkQueue.length;
         if (!isProcessingChunk) processNextChunk();
       }
     };
@@ -638,8 +743,11 @@
     mediaRecorder.start(chunkMs);
     isListening = true;
 
-    btnStart.style.display = 'none';
-    btnStop.style.display  = 'block';
+    btnStart.style.display     = 'none';
+    btnStop.style.display      = 'block';
+    pipelineWrap.style.display = 'block';
+    pipeReset();
+    pipeLog('聞き取り開始 — 5秒ごとにチャンク処理');
     setStatus('🟢 聞き取り中…', 'listening');
   }
 
@@ -648,6 +756,8 @@
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
     stopMeter();
+    pipeReset();
+    pipelineWrap.style.display = 'none';
     isListening = false;
     btnStart.style.display = 'block';
     btnStop.style.display  = 'none';
@@ -721,8 +831,11 @@
     procIndicator.style.display = 'flex';
 
     const blob = chunkQueue.shift();
+    psQueue.textContent = chunkQueue.length;
 
     try {
+      // Step 1: デコード
+      pipeSet('decode', 'active', `音声デコード中 (${(blob.size/1024).toFixed(1)} KB)`);
       const arrayBuffer = await blob.arrayBuffer();
       const audioCtx    = new AudioContext({ sampleRate: 16000 });
 
@@ -730,7 +843,7 @@
       try {
         audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       } catch (decErr) {
-        console.warn('[decodeAudioData] skipped:', decErr.message);
+        pipeSet('decode', 'skip', `デコード失敗: ${decErr.message}`);
         await audioCtx.close();
         return processNextChunk();
       }
@@ -738,12 +851,18 @@
       // Mono Float32 PCM at 16 kHz — required by Whisper
       const pcm = audioBuffer.getChannelData(0);
       await audioCtx.close();
+      pipeSet('decode', 'done', `デコード完了 (${audioBuffer.duration.toFixed(1)}秒, サンプル数:${pcm.length.toLocaleString()})`);
 
-      // Skip near-silent chunks to avoid hallucinated transcriptions
+      // 無音チェック
       const rms = Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length);
-      if (rms < 0.004) return processNextChunk();
+      const dbVal = rms > 0 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
+      if (rms < 0.004) {
+        pipeSet('whisper', 'skip', `無音スキップ (RMS: ${dbVal} dB < -48 dB)`);
+        return processNextChunk();
+      }
 
-      // ── Whisper transcription ──
+      // Step 2: Whisper
+      pipeSet('whisper', 'active', `Whisper認識中… (音量: ${dbVal} dB)`);
       const result = await transcriber(pcm, {
         language: 'english',
         task: 'transcribe',
@@ -753,25 +872,32 @@
 
       const text = (result.text ?? '').trim();
 
-      // Filter junk output (e.g. "[BLANK_AUDIO]", single chars)
+      // Filter junk output
       if (!text || text.length < 3 || /^\[.*\]$/.test(text)) {
+        pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
         return processNextChunk();
       }
+      pipeSet('whisper', 'done', `認識完了: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
 
       englishText.textContent = text;
 
       if (autoTranslate) {
+        // Step 3: 翻訳
+        pipeSet('translate', 'active', '翻訳中…');
         subtitleText.textContent = '翻訳中…';
         subtitleText.classList.add('thinking');
         const ja = await translateText(text);
+        pipeSet('translate', 'done', `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
         subtitleText.textContent = ja;
         subtitleText.classList.remove('thinking');
         addHistory(text, ja);
       } else {
+        pipeSet('translate', 'skip', '自動翻訳 OFF');
         addHistory(text, '（自動翻訳 OFF）');
       }
 
     } catch (err) {
+      pipeLog(`❌ エラー: ${err.message}`);
       console.error('[processNextChunk]', err);
     }
 
