@@ -548,7 +548,7 @@
     </div>
     <div style="font-size:0.78rem;color:#475569;margin-top:4px;">
       🤖 音声認識エンジン: <strong style="color:#38bdf8;">OpenAI Whisper API</strong>（whisper-1 / $0.006/分）<br>
-      ✅ 翻訳エンジン: <strong style="color:#38bdf8;">Lingva Translate</strong>（登録不要・無制限・Google翻訳相当）<br>
+      🌐 翻訳エンジン: <strong style="color:#38bdf8;">Google翻訳</strong> → MyMemory → Lingva（自動フォールバック）<br>
       🔑 APIキーはこのページ内にのみ保存されます（外部サーバーには送信しません）
     </div>
   </div>
@@ -1073,20 +1073,46 @@
     processNextChunk();
   }
 
-  // ── MyMemory translation ────────────────────────────────────────
   // ── ハルシネーション検出 ─────────────────────────────────────────
   // Whisperは音声不明瞭なとき同じフレーズをループする（幻覚出力）
-  // ウィンドウサイズ2〜6単語で同じフレーズが4回以上 → ハルシネーションと判定
+  // 【短文】1語が3回以上 OR 2語フレーズが2回以上 → ハルシネーション
+  // 【長文】ウィンドウサイズ2〜6単語で同じフレーズが4回以上 → ハルシネーション
   function isHallucination(text) {
     const words = text.trim().split(/\s+/);
-    if (words.length < 10) return false;   // 短すぎる文は判定しない
-    for (let w = 2; w <= 6; w++) {
-      const seen = new Map();
-      for (let i = 0; i <= words.length - w; i++) {
-        const key = words.slice(i, i + w).join(' ').toLowerCase();
-        const cnt = (seen.get(key) || 0) + 1;
-        seen.set(key, cnt);
-        if (cnt >= 4) return true;         // 同じフレーズが4回以上 → 幻覚
+
+    // ── 短文チェック（"Thank you. Thank you. Thank you." など）──
+    if (words.length >= 3) {
+      // 1語の繰り返し（句読点込みで正規化）
+      const normalized = words.map(w => w.replace(/[^a-zA-Z0-9]/g, '').toLowerCase());
+      const freq1 = new Map();
+      for (const w of normalized) {
+        if (!w) continue;
+        const c = (freq1.get(w) || 0) + 1;
+        freq1.set(w, c);
+        if (c >= 3) return true;           // 同じ単語が3回以上
+      }
+    }
+    if (words.length >= 4) {
+      // 2語フレーズの繰り返し
+      const seen2 = new Map();
+      for (let i = 0; i <= words.length - 2; i++) {
+        const key = words.slice(i, i + 2).join(' ').toLowerCase().replace(/[^a-z0-9 ]/g, '');
+        const c = (seen2.get(key) || 0) + 1;
+        seen2.set(key, c);
+        if (c >= 2) return true;           // 同じ2語フレーズが2回以上
+      }
+    }
+
+    // ── 長文チェック ──
+    if (words.length >= 10) {
+      for (let w = 2; w <= 6; w++) {
+        const seen = new Map();
+        for (let i = 0; i <= words.length - w; i++) {
+          const key = words.slice(i, i + w).join(' ').toLowerCase();
+          const cnt = (seen.get(key) || 0) + 1;
+          seen.set(key, cnt);
+          if (cnt >= 4) return true;       // 同じフレーズが4回以上 → 幻覚
+        }
       }
     }
     return false;
@@ -1095,29 +1121,63 @@
   let translationPaused = false;  // 403 発生時に翻訳を一時停止
   let sentenceBuffer    = '';     // 翻訳待ち英文バッファ（文完成まで貯める）
 
-  // Lingva Translate インスタンス（メインが落ちたときフォールバック）
+  // ── 翻訳エンジン（優先順位：Google非公式 → MyMemory → Lingva）─────
+  // 1. Google Translate 非公式 API（登録不要・高信頼性）
+  async function translateViaGoogle(en) {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ja&dt=t&q=${encodeURIComponent(en)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`Google ${res.status}`);
+    const data = await res.json();
+    // data[0] = [[translated, original, ...], ...]
+    const translated = data[0].map(item => item[0]).filter(Boolean).join('');
+    if (!translated) throw new Error('Google: empty response');
+    return translated;
+  }
+
+  // 2. MyMemory（1日5000字まで無料）
+  async function translateViaMyMemory(en) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|ja`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`MyMemory ${res.status}`);
+    const data = await res.json();
+    if (data.responseStatus !== 200) throw new Error(`MyMemory status ${data.responseStatus}`);
+    return data.responseData.translatedText;
+  }
+
+  // 3. Lingva（フォールバック群）
   const LINGVA_HOSTS = [
     'https://lingva.ml',
     'https://lingva.pussthecat.org',
     'https://translate.plausibility.cloud',
   ];
-
-  async function translateText(en) {
-    // 各インスタンスを順番に試す
+  async function translateViaLingva(en) {
     for (const host of LINGVA_HOSTS) {
       try {
         const url = `${host}/api/v1/en/ja/${encodeURIComponent(en)}`;
-        const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
         if (!res.ok) continue;
         const data = await res.json();
-        if (data.translation) {
-          return data.translation;
-        }
-      } catch (e) {
-        pipeLog(`⚠ ${host} 失敗 → 次のサーバーを試します`);
-      }
+        if (data.translation) return data.translation;
+      } catch (e) { /* 次へ */ }
     }
-    return '[翻訳失敗: すべてのサーバーが応答しませんでした]';
+    throw new Error('All Lingva instances failed');
+  }
+
+  // メイン翻訳関数（カスケードフォールバック）
+  async function translateText(en) {
+    // Google 非公式 API を優先
+    try { return await translateViaGoogle(en); } catch (e) {
+      pipeLog(`⚠ Google翻訳 失敗 (${e.message}) → MyMemory へ`);
+    }
+    // MyMemory にフォールバック
+    try { return await translateViaMyMemory(en); } catch (e) {
+      pipeLog(`⚠ MyMemory 失敗 (${e.message}) → Lingva へ`);
+    }
+    // Lingva にフォールバック
+    try { return await translateViaLingva(en); } catch (e) {
+      pipeLog(`⚠ Lingva 全滅 (${e.message})`);
+    }
+    return '[翻訳失敗: すべての翻訳サービスが応答しませんでした]';
   }
 
   function show403Warning(show) {
