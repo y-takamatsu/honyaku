@@ -425,11 +425,9 @@
   ⚠️ 音声トラックが検出されませんでした。もう一度「聞き取り開始」を押して、ダイアログで「<strong>音声を共有</strong>」にチェックを入れてください。
 </div>
 
-<!-- 翻訳403警告（常時表示エリア） -->
-<div id="warn-403" style="display:none; background:#7c2d12; border-radius:8px; padding:12px 16px; margin-bottom:14px; font-size:0.88rem; color:#fed7aa; border:1px solid #ef4444;">
-  ⚠️ <strong>翻訳上限（403）に達しました。</strong><br>
-  下の「設定」→「メール登録」にアドレスを入力すると上限が<strong>10倍（5,000→50,000文字/日）</strong>になります。<br>
-  入力後「⏹ 停止」→「🎧 聞き取り開始」で再開してください。
+<!-- 翻訳エラー警告（Lingva全インスタンス失敗時のみ表示） -->
+<div id="warn-403" style="display:none; background:#1e293b; border-radius:8px; padding:12px 16px; margin-bottom:14px; font-size:0.88rem; color:#94a3b8; border:1px solid #334155;">
+  ⚠️ 翻訳サーバーに接続できません。ネットワークを確認するか、しばらく待ってから再開してください。
 </div>
 
 <!-- Pipeline status -->
@@ -523,12 +521,9 @@
     <div style="font-size:0.78rem;color:#475569;margin-top:-4px;margin-bottom:8px;">
       ※ 無音を検出したタイミングで自動的にチャンクが確定されます（VAD）
     </div>
-    <div class="setting-row">
-      <label>メール登録</label>
-      <input type="email" id="email-input" placeholder="MyMemory翻訳の上限緩和（任意・無料）">
-    </div>
     <div style="font-size:0.78rem;color:#475569;margin-top:4px;">
-      ※ モデルを変更すると再ダウンロードが始まります
+      ※ モデルを変更すると再ダウンロードが始まります<br>
+      ✅ 翻訳エンジン: <strong style="color:#38bdf8;">Lingva Translate</strong>（登録不要・無制限・Google翻訳相当）
     </div>
   </div>
 
@@ -1074,34 +1069,29 @@ self.onmessage = async ({ data: msg }) => {
   let translationPaused = false;  // 403 発生時に翻訳を一時停止
   let sentenceBuffer    = '';     // 翻訳待ち英文バッファ（文完成まで貯める）
 
+  // Lingva Translate インスタンス（メインが落ちたときフォールバック）
+  const LINGVA_HOSTS = [
+    'https://lingva.ml',
+    'https://lingva.pussthecat.org',
+    'https://translate.plausibility.cloud',
+  ];
+
   async function translateText(en) {
-    if (translationPaused) return '（翻訳上限：下の設定欄にメールを入力してください）';
-
-    const email = emailInput.value.trim();
-    const url   = 'https://api.mymemory.translated.net/get'
-      + `?q=${encodeURIComponent(en)}&langpair=en|ja`
-      + (email ? `&de=${encodeURIComponent(email)}` : '');
-    try {
-      const res  = await fetch(url);
-      const data = await res.json();
-
-      if (data.responseStatus === 200) {
-        translationPaused = false;
-        show403Warning(false);
-        return data.responseData.translatedText;
+    // 各インスタンスを順番に試す
+    for (const host of LINGVA_HOSTS) {
+      try {
+        const url = `${host}/api/v1/en/ja/${encodeURIComponent(en)}`;
+        const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data.translation) {
+          return data.translation;
+        }
+      } catch (e) {
+        pipeLog(`⚠ ${host} 失敗 → 次のサーバーを試します`);
       }
-
-      if (data.responseStatus === 403 || data.responseStatus === 429) {
-        translationPaused = true;
-        show403Warning(true);
-        pipeLog('⚠ 翻訳上限 (403) — 設定欄にメールを入力すると上限が10倍になります');
-        return '（翻訳上限エラー：設定欄にメールを入力してください）';
-      }
-
-      return `[翻訳エラー ${data.responseStatus}]`;
-    } catch (e) {
-      return `[翻訳失敗: ${e.message}]`;
     }
+    return '[翻訳失敗: すべてのサーバーが応答しませんでした]';
   }
 
   function show403Warning(show) {
