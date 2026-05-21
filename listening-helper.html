@@ -470,8 +470,16 @@
 
   <!-- English -->
   <div class="english-area">
-    <div class="area-label">認識した英語</div>
-    <div id="english-text">（聞き取った英語がここに表示されます）</div>
+    <div class="area-label" style="display:flex;justify-content:space-between;">
+      <span>翻訳した英語（字幕と同期）</span>
+      <span id="delay-label" style="color:#475569;font-size:0.72rem;"></span>
+    </div>
+    <div id="english-text">（翻訳完了した英語がここに表示されます）</div>
+    <!-- 蓄積中バッファ -->
+    <div id="buffer-area" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid #263347;">
+      <div style="font-size:0.72rem;color:#475569;margin-bottom:4px;">🎙 聞き取り中（翻訳待ち）</div>
+      <div id="buffer-text" style="color:#64748b;font-size:0.85rem;font-style:italic;"></div>
+    </div>
   </div>
 
   <!-- Subtitle -->
@@ -603,6 +611,10 @@ self.onmessage = async ({ data: msg }) => {
   const progressLabel = document.getElementById('progress-label');
   const progressInner = document.getElementById('progress-inner');
   const englishText   = document.getElementById('english-text');
+  const bufferArea    = document.getElementById('buffer-area');
+  const bufferText    = document.getElementById('buffer-text');
+  const delayLabel    = document.getElementById('delay-label');
+  let   lastTranslateTime = null;
   const subtitleText  = document.getElementById('subtitle-text');
   const historyList   = document.getElementById('history-list');
   const slider        = document.getElementById('font-size-slider');
@@ -1004,39 +1016,50 @@ self.onmessage = async ({ data: msg }) => {
       pipeSet('whisper', 'done',
         `認識完了 (${elapsed}秒): "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
 
-      // バッファに追記して英文エリアに表示
+      // バッファに追記 → 「聞き取り中」エリアに表示（英語欄とは別）
       sentenceBuffer = (sentenceBuffer + ' ' + text).trim();
-      englishText.textContent = sentenceBuffer;
+      bufferArea.style.display = 'block';
+      bufferText.textContent   = sentenceBuffer;
 
       if (autoTranslate) {
-        // ── センテンスバッファ翻訳 ──────────────────────────────────
-        // 文末記号（.!?）があるか、単語数が20超えたら翻訳してバッファをリセット
+        // 文末（.!?）検出 OR 15語超 → 翻訳してバッファリセット
         const wordCount   = sentenceBuffer.split(/\s+/).length;
         const hasSentEnd  = /[.!?]["']?\s*$/.test(sentenceBuffer);
-        const forcedFlush = wordCount >= 20;
+        const forcedFlush = wordCount >= 15;
 
         if (hasSentEnd || forcedFlush) {
           const toTranslate = sentenceBuffer;
           sentenceBuffer    = '';
+          bufferText.textContent   = '';
+          bufferArea.style.display = 'none';
 
           pipeSet('translate', 'active',
-            `翻訳中… (${wordCount}語 / ${hasSentEnd ? '文末検出' : '強制フラッシュ'})`);
+            `翻訳中… (${wordCount}語 / ${hasSentEnd ? '文末検出' : '強制'})`);
           subtitleText.textContent = '翻訳中…';
           subtitleText.classList.add('thinking');
+
           const ja = await translateText(toTranslate);
-          pipeSet('translate', 'done',
-            `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
+
+          // 英語・日本語を同時に更新（常に同期）
+          englishText.textContent = toTranslate;
           subtitleText.textContent = ja;
           subtitleText.classList.remove('thinking');
+
+          // 遅延表示
+          lastTranslateTime = Date.now();
+          pipeSet('translate', 'done',
+            `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
           addHistory(toTranslate, ja);
         } else {
           pipeSet('translate', 'skip',
-            `バッファ蓄積中 (${wordCount}語 — 文末待ち)`);
+            `蓄積中 (${wordCount}語 — ${hasSentEnd ? '文末待ち' : `あと${15 - wordCount}語`})`);
         }
       } else {
         pipeSet('translate', 'skip', '自動翻訳 OFF');
+        englishText.textContent = sentenceBuffer;
         addHistory(sentenceBuffer, '（自動翻訳 OFF）');
         sentenceBuffer = '';
+        bufferArea.style.display = 'none';
       }
 
     } catch (err) {
@@ -1135,6 +1158,13 @@ self.onmessage = async ({ data: msg }) => {
   modelSelect.addEventListener('change', () => {
     loadModel();
   });
+
+  // ── 遅延タイマー（1秒ごとに「最後の翻訳から○秒」を更新）───────────
+  setInterval(() => {
+    if (!lastTranslateTime) { delayLabel.textContent = ''; return; }
+    const sec = Math.round((Date.now() - lastTranslateTime) / 1000);
+    delayLabel.textContent = sec < 5 ? '' : `最後の翻訳: ${sec}秒前`;
+  }, 1000);
 
   // ── Init ────────────────────────────────────────────────────────
   loadModel();
