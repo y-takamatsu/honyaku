@@ -506,12 +506,15 @@
       </select>
     </div>
     <div class="setting-row">
-      <label>録音チャンク</label>
+      <label>最大チャンク長</label>
       <select id="chunk-duration">
         <option value="3000" selected>3秒（推奨）</option>
         <option value="5000">5秒</option>
-        <option value="8000">8秒（低負荷）</option>
+        <option value="8000">8秒（長文向き）</option>
       </select>
+    </div>
+    <div style="font-size:0.78rem;color:#475569;margin-top:-4px;margin-bottom:8px;">
+      ※ 無音を検出したタイミングで自動的にチャンクが確定されます（VAD）
     </div>
     <div class="setting-row">
       <label>メール登録</label>
@@ -794,27 +797,53 @@ self.onmessage = async ({ data: msg }) => {
     startMeter(audioStream);
 
     // ── PCM直接取得（ScriptProcessor方式）──
-    // MediaRecorder + decodeAudioData はWebM形式の問題でデコード失敗するため廃止。
-    // ScriptProcessorでFloat32 PCMを直接取得しWhisperに渡す。
-    const chunkSamples = Math.round(parseInt(chunkSelect.value, 10) / 1000 * 16000);
+    // VAD（音声区間検出）チャンキング
+    // 無音が続いたタイミングで切る → 話の切れ目で自然にチャンクが区切られる
+    const FRAME      = 4096;
+    const SR         = 16000;
+    const MIN_SPEECH = SR * 1;          // 最低1秒の音声が溜まってから送る
+    const MAX_SPEECH = SR * parseInt(chunkSelect.value, 10) / 1000; // 設定値が最大
+    const VAD_THR    = 0.003;           // 無音と判定するRMS閾値
+    const VAD_HOLD   = Math.ceil(SR * 0.4 / FRAME); // 0.4秒の無音でチャンク確定
+    let   silFrames  = 0;               // 連続無音フレーム数
+
     pcmBuffer    = [];
-    recordingCtx = new AudioContext({ sampleRate: 16000 });
+    recordingCtx = new AudioContext({ sampleRate: SR });
 
     const source = recordingCtx.createMediaStreamSource(audioStream);
-    recordingProcessor = recordingCtx.createScriptProcessor(4096, 1, 1);
+    recordingProcessor = recordingCtx.createScriptProcessor(FRAME, 1, 1);
+
+    const flushChunk = (reason) => {
+      if (pcmBuffer.length < MIN_SPEECH / 4) return; // 極端に短い断片は捨てる
+      const chunk = new Float32Array(pcmBuffer.splice(0, pcmBuffer.length));
+      silFrames = 0;
+      chunkQueue.push(chunk);
+      pipeSet('record', 'done',
+        `録音チャンク [${reason}] ${(chunk.length / SR).toFixed(1)}秒 / ${chunk.length.toLocaleString()}サンプル`);
+      psQueue.textContent = chunkQueue.length;
+      if (!isProcessingChunk) processNextChunk();
+    };
 
     recordingProcessor.onaudioprocess = (e) => {
       if (!isListening) return;
-      const samples = e.inputBuffer.getChannelData(0);
+      const samples  = e.inputBuffer.getChannelData(0);
+      const frameRms = Math.sqrt(samples.reduce((s, v) => s + v * v, 0) / samples.length);
+
       for (let i = 0; i < samples.length; i++) pcmBuffer.push(samples[i]);
 
-      if (pcmBuffer.length >= chunkSamples) {
-        const chunk = new Float32Array(pcmBuffer.splice(0, chunkSamples));
-        chunkQueue.push(chunk);
-        pipeSet('record', 'done',
-          `録音チャンク受信 (${(chunk.length / 16000).toFixed(0)}秒 / ${chunk.length.toLocaleString()}サンプル)`);
-        psQueue.textContent = chunkQueue.length;
-        if (!isProcessingChunk) processNextChunk();
+      if (frameRms < VAD_THR) {
+        silFrames++;
+        // 無音が一定時間続いて十分な音声がある → 発話終了とみなす
+        if (silFrames >= VAD_HOLD && pcmBuffer.length >= MIN_SPEECH) {
+          flushChunk('無音検出');
+        }
+      } else {
+        silFrames = 0;
+      }
+
+      // 最大長を超えたら強制送出
+      if (pcmBuffer.length >= MAX_SPEECH) {
+        flushChunk('最大長');
       }
     };
 
@@ -842,9 +871,10 @@ self.onmessage = async ({ data: msg }) => {
     if (recordingProcessor) { recordingProcessor.disconnect(); recordingProcessor = null; }
     if (recordingCtx)       { recordingCtx.close(); recordingCtx = null; }
     if (mediaStream)        { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-    pcmBuffer      = [];
-    pendingResolve = null;
-    pendingReject  = null;
+    pcmBuffer         = [];
+    pendingResolve    = null;
+    pendingReject     = null;
+    translationPaused = false;
     // Worker は loadModel で再利用するため terminate しない
     if (whisperWorker) whisperWorker.onmessage = onWorkerMessage;
     stopMeter();
@@ -985,7 +1015,11 @@ self.onmessage = async ({ data: msg }) => {
   }
 
   // ── MyMemory translation ────────────────────────────────────────
+  let translationPaused = false;  // 403 発生時に翻訳を一時停止
+
   async function translateText(en) {
+    if (translationPaused) return '（翻訳上限：下の設定欄にメールを入力してください）';
+
     const email = emailInput.value.trim();
     const url   = 'https://api.mymemory.translated.net/get'
       + `?q=${encodeURIComponent(en)}&langpair=en|ja`
@@ -993,11 +1027,40 @@ self.onmessage = async ({ data: msg }) => {
     try {
       const res  = await fetch(url);
       const data = await res.json();
-      if (data.responseStatus === 200) return data.responseData.translatedText;
+
+      if (data.responseStatus === 200) {
+        translationPaused = false;
+        show403Warning(false);
+        return data.responseData.translatedText;
+      }
+
+      if (data.responseStatus === 403 || data.responseStatus === 429) {
+        translationPaused = true;
+        show403Warning(true);
+        pipeLog('⚠ 翻訳上限 (403) — 設定欄にメールを入力すると上限が10倍になります');
+        return '（翻訳上限エラー：設定欄にメールを入力してください）';
+      }
+
       return `[翻訳エラー ${data.responseStatus}]`;
     } catch (e) {
       return `[翻訳失敗: ${e.message}]`;
     }
+  }
+
+  function show403Warning(show) {
+    let el = document.getElementById('warn-403');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'warn-403';
+      el.style.cssText = 'background:#7c2d12;border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:0.88rem;color:#fed7aa;border:1px solid #ef4444;';
+      el.innerHTML = `⚠️ <strong>翻訳上限（403）に達しました。</strong><br>
+        設定欄の「メール登録」にメールアドレスを入力すると1日の上限が<strong>10倍</strong>になります。<br>
+        入力後は「停止 → 聞き取り開始」で再開してください。`;
+      // パイプラインの直前に挿入
+      const pipe = document.getElementById('pipeline-wrap');
+      pipe.parentNode.insertBefore(el, pipe);
+    }
+    el.style.display = show ? 'block' : 'none';
   }
 
   // ── History ─────────────────────────────────────────────────────
