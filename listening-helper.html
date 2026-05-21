@@ -528,14 +528,47 @@
 
 <script type="module">
   // ─────────────────────────────────────────────────────────────
-  //  Whisper.js via @xenova/transformers (CDN, no install needed)
+  //  Whisper.js は Web Worker 内で動かす（メインスレッドのフリーズを防止）
   // ─────────────────────────────────────────────────────────────
-  import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
 
-  env.allowLocalModels = false;   // Use Hugging Face Hub models
+  // Worker のインラインコード（Blob URL で生成）
+  const WORKER_CODE = `
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+env.allowLocalModels = false;
+
+let transcriber = null;
+
+self.onmessage = async ({ data: msg }) => {
+  if (msg.type === 'load') {
+    try {
+      transcriber = await pipeline('automatic-speech-recognition', msg.modelId, {
+        progress_callback: (p) => self.postMessage({ type: 'progress', payload: p })
+      });
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', payload: err.message });
+    }
+  } else if (msg.type === 'transcribe') {
+    try {
+      const pcm    = new Float32Array(msg.pcmBuffer);
+      const result = await transcriber(pcm, {
+        language: 'english',
+        task: 'transcribe',
+        chunk_length_s: 30,
+        return_timestamps: false
+      });
+      self.postMessage({ type: 'result', payload: result.text ?? '' });
+    } catch (err) {
+      self.postMessage({ type: 'error', payload: err.message });
+    }
+  }
+};
+`;
 
   // ── State ──────────────────────────────────────────────────────
-  let transcriber        = null;
+  let whisperWorker      = null;   // Worker インスタンス
+  let pendingResolve     = null;   // transcribeInWorker の Promise resolver
+  let pendingReject      = null;
   let mediaStream        = null;
   let isListening        = false;
   let chunkQueue         = [];
@@ -649,39 +682,73 @@
     while (psLog.children.length > 20) psLog.removeChild(psLog.lastChild);
   }
 
-  // ── Load Whisper model ──────────────────────────────────────────
-  async function loadModel() {
+  // ── Worker メッセージハンドラ（聞き取り中）────────────────────────
+  function onWorkerMessage({ data: msg }) {
+    if (msg.type === 'result') {
+      if (pendingResolve) { pendingResolve(msg.payload); pendingResolve = pendingReject = null; }
+    } else if (msg.type === 'error') {
+      if (pendingReject)  { pendingReject(new Error(msg.payload)); pendingResolve = pendingReject = null; }
+    }
+  }
+
+  // PCM を Worker に送り、認識結果を Promise で受け取る
+  function transcribeInWorker(pcm) {
+    return new Promise((resolve, reject) => {
+      pendingResolve = resolve;
+      pendingReject  = reject;
+      // pcm.buffer を転送（コピーなしで Worker へ渡す）
+      whisperWorker.postMessage({ type: 'transcribe', pcmBuffer: pcm.buffer }, [pcm.buffer]);
+    });
+  }
+
+  // ── Load Whisper model（Worker 起動）──────────────────────────────
+  function loadModel() {
     const modelId = modelSelect.value;
     setStatus(`AIモデルを準備中… (${modelId.split('/')[1]})`);
     btnStart.disabled = true;
-    transcriber = null;
 
-    try {
-      const fileProgress = {};
+    // 既存 Worker があれば終了
+    if (whisperWorker) { whisperWorker.terminate(); whisperWorker = null; }
 
-      transcriber = await pipeline('automatic-speech-recognition', modelId, {
-        progress_callback: (p) => {
-          if (p.status === 'downloading' || p.status === 'progress') {
-            const key = p.file ?? 'main';
-            fileProgress[key] = p.progress ?? 0;
-            const vals = Object.values(fileProgress);
-            const avg  = vals.reduce((a, b) => a + b, 0) / vals.length;
-            showProgress(`ダウンロード中: ${Math.round(avg)}%`, avg);
-          } else if (p.status === 'loading') {
-            showProgress('モデルをロード中…', 92);
-          } else if (p.status === 'ready') {
-            showProgress('完了', 100);
-          }
+    // インライン Worker を Blob URL で生成
+    const blob = new Blob([WORKER_CODE], { type: 'text/javascript' });
+    const url  = URL.createObjectURL(blob);
+    whisperWorker = new Worker(url, { type: 'module' });
+    URL.revokeObjectURL(url);
+
+    const fileProgress = {};
+
+    // ロード完了まで専用ハンドラで進捗を表示
+    whisperWorker.onmessage = ({ data: msg }) => {
+      if (msg.type === 'progress') {
+        const p = msg.payload;
+        if (p.status === 'downloading' || p.status === 'progress') {
+          const key  = p.file ?? 'main';
+          fileProgress[key] = p.progress ?? 0;
+          const vals = Object.values(fileProgress);
+          const avg  = vals.reduce((a, b) => a + b, 0) / vals.length;
+          showProgress(`ダウンロード中: ${Math.round(avg)}%`, avg);
+        } else if (p.status === 'loading') {
+          showProgress('モデルをロード中…', 92);
+        } else if (p.status === 'ready') {
+          showProgress('完了', 100);
         }
-      });
+      } else if (msg.type === 'ready') {
+        setStatus('準備完了 — 「聞き取り開始」を押してください');
+        btnStart.disabled = false;
+        // ロード完了後は onWorkerMessage に切り替え
+        whisperWorker.onmessage = onWorkerMessage;
+      } else if (msg.type === 'error') {
+        setStatus(`モデル読み込みエラー: ${msg.payload}`, 'error');
+      }
+    };
 
-      setStatus('準備完了 — 「聞き取り開始」を押してください');
-      btnStart.disabled = false;
+    whisperWorker.onerror = (e) => {
+      setStatus(`Workerエラー: ${e.message}`, 'error');
+      console.error('[Worker]', e);
+    };
 
-    } catch (err) {
-      setStatus(`モデル読み込みエラー: ${err.message}`, 'error');
-      console.error('[loadModel]', err);
-    }
+    whisperWorker.postMessage({ type: 'load', modelId });
   }
 
   // ── Start listening ─────────────────────────────────────────────
@@ -773,7 +840,11 @@
     if (recordingProcessor) { recordingProcessor.disconnect(); recordingProcessor = null; }
     if (recordingCtx)       { recordingCtx.close(); recordingCtx = null; }
     if (mediaStream)        { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-    pcmBuffer = [];
+    pcmBuffer      = [];
+    pendingResolve = null;
+    pendingReject  = null;
+    // Worker は loadModel で再利用するため terminate しない
+    if (whisperWorker) whisperWorker.onmessage = onWorkerMessage;
     stopMeter();
     pipeReset();
     pipelineWrap.style.display = 'none';
@@ -866,16 +937,9 @@
         return processNextChunk();
       }
 
-      // Whisper認識
+      // Whisper認識（Worker 内で実行 → メインスレッドはフリーズしない）
       pipeSet('whisper', 'active', `Whisper認識中… (音量: ${dbVal} dB)`);
-      const result = await transcriber(pcm, {
-        language: 'english',
-        task: 'transcribe',
-        chunk_length_s: 30,
-        return_timestamps: false
-      });
-
-      const text = (result.text ?? '').trim();
+      const text = (await transcribeInWorker(pcm)).trim();
 
       if (!text || text.length < 3 || /^\[.*\]$/.test(text)) {
         pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
@@ -960,7 +1024,6 @@
   atToggle.addEventListener('change', () => { autoTranslate = atToggle.checked; });
 
   modelSelect.addEventListener('change', () => {
-    transcriber = null;
     loadModel();
   });
 
