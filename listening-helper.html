@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎧 Listening Helper - Zoom翻訳補助</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0a0f1e;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 20px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      padding: 20px 0 16px;
+    }
+    header h1 { font-size: 1.8rem; color: #38bdf8; }
+    header p  { color: #94a3b8; margin-top: 6px; font-size: 0.95rem; }
+
+    /* ── Status bar ── */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-left: 4px solid #38bdf8;
+      transition: border-color 0.3s;
+    }
+    #status-bar.listening { border-left-color: #22c55e; }
+    #status-bar.error     { border-left-color: #ef4444; }
+
+    .status-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #38bdf8;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .status-dot.listening {
+      background: #22c55e;
+      animation: pulse-dot 1.2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { transform: scale(1); opacity: 1; }
+      50%      { transform: scale(1.5); opacity: 0.6; }
+    }
+
+    /* ── Progress bar ── */
+    #progress-container {
+      display: none;
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+    }
+    #progress-label { font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; }
+    #progress-outer {
+      background: #334155;
+      border-radius: 4px;
+      height: 8px;
+    }
+    #progress-inner {
+      background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+      height: 8px;
+      border-radius: 4px;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    /* ── Buttons ── */
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 12px 24px;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    #btn-start {
+      background: #0ea5e9;
+      color: #fff;
+      flex: 1;
+      min-width: 200px;
+    }
+    #btn-start:hover:not(:disabled) { background: #0284c7; transform: translateY(-1px); }
+    #btn-start:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    #btn-stop {
+      background: #ef4444;
+      color: #fff;
+      display: none;
+      flex: 1;
+      min-width: 200px;
+    }
+    #btn-stop:hover { background: #dc2626; }
+    #btn-clear {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+    }
+    #btn-clear:hover { background: #334155; }
+
+    /* ── No-audio warning ── */
+    #no-audio-warning {
+      display: none;
+      background: #7c2d12;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 0.88rem;
+      color: #fed7aa;
+    }
+
+    /* ── Audio meter ── */
+    #audio-meter-wrap {
+      display: none;
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 12px 16px;
+      border: 1px solid #334155;
+      margin-bottom: 16px;
+    }
+    #audio-meter-wrap.active { display: block; }
+    .meter-label {
+      font-size: 0.75rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+    #meter-db { color: #38bdf8; font-weight: 600; }
+    #meter-bar-outer {
+      background: #0f172a;
+      border-radius: 6px;
+      height: 20px;
+      overflow: hidden;
+      position: relative;
+    }
+    #meter-bar-inner {
+      height: 100%;
+      width: 0%;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #22c55e 0%, #84cc16 60%, #eab308 80%, #ef4444 100%);
+      transition: width 0.05s;
+    }
+    #meter-canvas {
+      width: 100%;
+      height: 48px;
+      margin-top: 8px;
+      border-radius: 6px;
+      background: #0f172a;
+    }
+    .meter-hint {
+      font-size: 0.78rem;
+      color: #475569;
+      margin-top: 6px;
+    }
+
+    /* ── Main content ── */
+    .main-content { display: grid; gap: 16px; }
+
+    /* English area */
+    .english-area {
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 14px 16px;
+      border: 1px solid #334155;
+    }
+    .area-label {
+      font-size: 0.75rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+    }
+    #english-text {
+      color: #94a3b8;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      min-height: 40px;
+    }
+
+    /* Subtitle area */
+    .subtitle-area {
+      background: #060d1f;
+      border-radius: 12px;
+      padding: 20px;
+      border: 2px solid #0ea5e9;
+    }
+    .subtitle-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .subtitle-controls label { font-size: 0.8rem; color: #64748b; }
+    .subtitle-controls input[type="range"] { flex: 1; min-width: 80px; accent-color: #38bdf8; }
+    #font-size-label { font-size: 0.8rem; color: #64748b; min-width: 36px; }
+
+    #subtitle-text {
+      color: #f1f5f9;
+      font-size: 2rem;
+      line-height: 1.4;
+      min-height: 60px;
+      font-weight: 500;
+      text-align: center;
+      transition: font-size 0.2s;
+      word-break: break-all;
+    }
+    #subtitle-text.thinking { color: #475569; font-size: 1.1rem !important; }
+
+    /* Toggle */
+    .toggle-row { display: flex; align-items: center; gap: 8px; }
+    .toggle { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #334155;
+      border-radius: 24px;
+      transition: 0.3s;
+    }
+    .toggle-slider:before {
+      content: '';
+      position: absolute;
+      width: 18px; height: 18px;
+      left: 3px; bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+    .toggle input:checked + .toggle-slider { background: #0ea5e9; }
+    .toggle input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+    /* History */
+    .history-area {
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 14px 16px;
+      border: 1px solid #334155;
+    }
+    .history-area h3 {
+      font-size: 0.75rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 10px;
+    }
+    #history-list { max-height: 300px; overflow-y: auto; }
+    .history-item { border-bottom: 1px solid #263347; padding: 10px 0; }
+    .history-item:last-child { border-bottom: none; }
+    .h-time { font-size: 0.72rem; color: #475569; margin-bottom: 3px; }
+    .h-en   { font-size: 0.85rem; color: #64748b; margin-bottom: 3px; }
+    .h-ja   { font-size: 1rem; color: #e2e8f0; }
+
+    /* Settings */
+    .settings-area {
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 14px 16px;
+      border: 1px solid #334155;
+    }
+    .settings-area h3 {
+      font-size: 0.75rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 12px;
+    }
+    .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .setting-row label { font-size: 0.85rem; color: #94a3b8; min-width: 100px; }
+    .setting-row select,
+    .setting-row input[type="email"],
+    .setting-row input[type="password"],
+    .setting-row input[type="text"] {
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      flex: 1;
+    }
+    #btn-save-key {
+      background: #0ea5e9;
+      color: #fff;
+      padding: 8px 20px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    #btn-save-key:hover { background: #0284c7; }
+    #btn-save-key:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+    footer {
+      text-align: center;
+      padding: 20px 0 10px;
+      font-size: 0.78rem;
+      color: #334155;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎧 Listening Helper</h1>
+  <p>Zoom会議の英語をリアルタイムで日本語字幕に変換 — ブラウザ完結型</p>
+</header>
+
+<!-- Status -->
+<div id="status-bar">
+  <div class="status-dot" id="status-dot"></div>
+  <span id="status-text">OpenAI APIキーを入力して「準備完了」を押してください</span>
+</div>
+
+<!-- Progress -->
+<div id="progress-container">
+  <div id="progress-label">モデルをダウンロード中…</div>
+  <div id="progress-outer"><div id="progress-inner"></div></div>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <button id="btn-start" disabled>🎧 聞き取り開始</button>
+  <button id="btn-stop">⏹ 停止</button>
+  <button id="btn-clear">🗑 履歴クリア</button>
+</div>
+
+<!-- No-audio warning -->
+<div id="no-audio-warning">
+  ⚠️ 音声トラックが検出されませんでした。もう一度「聞き取り開始」を押して、ダイアログで「<strong>音声を共有</strong>」にチェックを入れてください。
+</div>
+
+<!-- Audio level meter -->
+<div id="audio-meter-wrap">
+  <div class="meter-label">
+    <span>🎚️ 入力音量レベル</span>
+    <span id="meter-db">-- dB</span>
+  </div>
+  <div id="meter-bar-outer">
+    <div id="meter-bar-inner"></div>
+  </div>
+  <canvas id="meter-canvas" height="48"></canvas>
+  <div class="meter-hint">バーが動いていれば音声を受信中です。無音・小さすぎると認識されません。</div>
+</div>
+
+<div class="main-content">
+
+  <!-- English -->
+  <div class="english-area">
+    <div class="area-label" style="display:flex;justify-content:space-between;">
+      <span>翻訳した英語（字幕と同期）</span>
+      <span id="delay-label" style="color:#475569;font-size:0.72rem;"></span>
+    </div>
+    <div id="english-text">（翻訳完了した英語がここに表示されます）</div>
+    <!-- 蓄積中バッファ -->
+    <div id="buffer-area" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid #263347;">
+      <div style="font-size:0.72rem;color:#475569;margin-bottom:4px;">🎙 聞き取り中（翻訳待ち）</div>
+      <div id="buffer-text" style="color:#64748b;font-size:0.85rem;font-style:italic;"></div>
+    </div>
+  </div>
+
+  <!-- Subtitle -->
+  <div class="subtitle-area">
+    <div class="subtitle-controls">
+      <label>字幕サイズ</label>
+      <input type="range" id="font-size-slider" min="16" max="64" value="32">
+      <span id="font-size-label">32px</span>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="auto-translate-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+        <span style="font-size:0.8rem;color:#64748b;">自動翻訳</span>
+      </div>
+      <div class="toggle-row" style="margin-left:12px;">
+        <label class="toggle">
+          <input type="checkbox" id="tts-toggle">
+          <span class="toggle-slider"></span>
+        </label>
+        <span style="font-size:0.8rem;color:#64748b;">🔊 読み上げ</span>
+        <select id="tts-rate-select" style="margin-left:8px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:3px 6px;border-radius:6px;font-size:0.8rem;">
+          <option value="1.5">1.5倍</option>
+          <option value="2.0" selected>2倍</option>
+          <option value="2.5">2.5倍</option>
+        </select>
+      </div>
+    </div>
+    <div id="subtitle-text">日本語の字幕がここに表示されます</div>
+  </div>
+
+  <!-- History -->
+  <div class="history-area">
+    <h3>履歴</h3>
+    <div id="history-list">
+      <div style="color:#475569;font-size:0.85rem;">（履歴はここに表示されます）</div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-area">
+    <h3>設定</h3>
+    <div class="setting-row">
+      <label>OpenAI APIキー</label>
+      <input type="password" id="api-key-input" placeholder="sk-..." autocomplete="off" spellcheck="false">
+    </div>
+    <div class="setting-row" style="margin-top:-4px;">
+      <label></label>
+      <div style="display:flex;align-items:center;gap:10px;flex:1;flex-wrap:wrap;">
+        <button id="btn-save-key" disabled>✅ 準備完了にする</button>
+        <span id="api-key-status" style="font-size:0.8rem;color:#64748b;"></span>
+      </div>
+    </div>
+    <div class="setting-row">
+      <label>最大チャンク長</label>
+      <select id="chunk-duration">
+        <option value="3000" selected>3秒（推奨）</option>
+        <option value="5000">5秒</option>
+        <option value="8000">8秒（長文向き）</option>
+      </select>
+    </div>
+    <div style="font-size:0.78rem;color:#475569;margin-top:-4px;margin-bottom:8px;">
+      ※ 無音を検出したタイミングで自動的にチャンクが確定されます（VAD）
+    </div>
+    <div style="font-size:0.78rem;color:#475569;margin-top:4px;">
+      🤖 音声認識: <strong style="color:#38bdf8;">OpenAI Whisper API</strong>（whisper-1 / $0.006/分）<br>
+      🌐 翻訳: <strong style="color:#38bdf8;">GPT-4o-mini</strong>（文脈・敬語対応 / 約$0.0001/回）→ Google翻訳（自動フォールバック）<br>
+      🔑 APIキーはこのページ内にのみ保存されます（外部サーバーには送信しません）
+    </div>
+  </div>
+
+</div>
+
+<footer>Listening Helper — Phase 2 | OpenAI Whisper API + GPT-4o-mini翻訳 | Chrome 専用</footer>
+
+<script>
+  // ─────────────────────────────────────────────────────────────
+  //  OpenAI Whisper API を直接呼び出す（ブラウザ完結型）
+  //  音声認識: https://api.openai.com/v1/audio/transcriptions
+  //  モデル: whisper-1 / 言語: en / 料金: $0.006/分
+  // ─────────────────────────────────────────────────────────────
+
+  // ── State ──────────────────────────────────────────────────────
+  let openaiApiKey       = '';     // OpenAI APIキー
+  let mediaStream        = null;
+  let isListening        = false;
+  let chunkQueue         = [];
+  let isProcessingChunk  = false;
+  let autoTranslate      = true;
+  let ttsEnabled         = false;  // 読み上げON/OFF
+  let ttsPending         = null;   // 読み上げ待ちテキスト（最新1件のみ保持）
+  let historyItems       = [];
+  let meterAnimId        = null;
+  let analyserNode       = null;
+  let meterAudioCtx      = null;
+  // PCM直接取得用（MediaRecorder廃止）
+  let recordingCtx       = null;
+  let recordingProcessor = null;
+  let pcmBuffer          = [];
+
+  // ── DOM refs ────────────────────────────────────────────────────
+  const btnStart      = document.getElementById('btn-start');
+  const btnStop       = document.getElementById('btn-stop');
+  const btnClear      = document.getElementById('btn-clear');
+  const statusBar     = document.getElementById('status-bar');
+  const statusDot     = document.getElementById('status-dot');
+  const statusText    = document.getElementById('status-text');
+  const progressBox   = document.getElementById('progress-container');
+  const progressLabel = document.getElementById('progress-label');
+  const progressInner = document.getElementById('progress-inner');
+  const englishText   = document.getElementById('english-text');
+  const bufferArea    = document.getElementById('buffer-area');
+  const bufferText    = document.getElementById('buffer-text');
+  const delayLabel    = document.getElementById('delay-label');
+  let   lastTranslateTime = null;
+  const subtitleText  = document.getElementById('subtitle-text');
+  const historyList   = document.getElementById('history-list');
+  const slider        = document.getElementById('font-size-slider');
+  const sliderLabel   = document.getElementById('font-size-label');
+  const atToggle      = document.getElementById('auto-translate-toggle');
+  const ttsToggle     = document.getElementById('tts-toggle');
+  const ttsRateSelect = document.getElementById('tts-rate-select');
+  const noAudioWarn   = document.getElementById('no-audio-warning');
+  const meterWrap     = document.getElementById('audio-meter-wrap');
+  const meterBarInner = document.getElementById('meter-bar-inner');
+  const meterDb       = document.getElementById('meter-db');
+  const meterCanvas   = document.getElementById('meter-canvas');
+  const meterCtx      = meterCanvas.getContext('2d');
+  const apiKeyInput    = document.getElementById('api-key-input');
+  const btnSaveKey     = document.getElementById('btn-save-key');
+  const apiKeyStatus   = document.getElementById('api-key-status');
+  const chunkSelect    = document.getElementById('chunk-duration');
+
+  // ── UI helpers ──────────────────────────────────────────────────
+  function setStatus(msg, state = '') {
+    statusText.textContent = msg;
+    statusBar.className    = state;
+    statusDot.className    = 'status-dot' + (state === 'listening' ? ' listening' : '');
+  }
+
+  function showProgress(label, pct) {
+    progressBox.style.display   = 'block';
+    progressLabel.textContent   = label;
+    progressInner.style.width   = Math.min(100, pct) + '%';
+    if (pct >= 100) setTimeout(() => { progressBox.style.display = 'none'; }, 1200);
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // pipeSet / pipeLog は削除（パイプライン表示廃止）→ console.log に集約
+  function pipeSet(step, state, detail = '') { if (detail) console.debug(`[pipe:${step}:${state}]`, detail); }
+  function pipeReset() {}
+  function pipeLog(msg) { console.debug('[pipe]', msg); }
+
+  // ── 日本語読み上げ（Web Speech API）────────────────────────────────
+  // 現在読み上げ中なら最後まで読んでから次を話す（最新1件のみキュー保持）
+  function speak(text) {
+    if (!ttsEnabled) return;
+    if (window.speechSynthesis.speaking) {
+      ttsPending = text;   // 現在の読み上げが終わったら話す（上書きで最新のみ保持）
+      return;
+    }
+    startSpeak(text);
+  }
+
+  function startSpeak(text) {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang   = 'ja-JP';
+    utter.rate   = parseFloat(ttsRateSelect.value);
+    utter.pitch  = 1.0;
+    utter.volume = 1.0;
+
+    // 日本語音声を優先して選択
+    const voices = window.speechSynthesis.getVoices();
+    const jaVoice = voices.find(v => v.lang === 'ja-JP' && v.localService)
+                 || voices.find(v => v.lang === 'ja-JP')
+                 || voices.find(v => v.lang.startsWith('ja'));
+    if (jaVoice) utter.voice = jaVoice;
+
+    // 読み上げ完了後にキューがあれば次を話す
+    utter.onend = () => {
+      if (ttsPending) {
+        const next = ttsPending;
+        ttsPending = null;
+        startSpeak(next);
+      }
+    };
+
+    window.speechSynthesis.speak(utter);
+  }
+
+  // ── PCM Float32Array → WAV Blob 変換 ────────────────────────────
+  // OpenAI API は audio/wav を受け付ける（16kHz, モノラル, 16bit PCM）
+  function pcmToWav(pcm, sampleRate = 16000) {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = pcm.length * bytesPerSample;
+    const bufferSize = 44 + dataSize;
+
+    const buffer = new ArrayBuffer(bufferSize);
+    const view = new DataView(buffer);
+
+    // Helper: write string as ASCII bytes
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    // RIFF header
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);    // ChunkSize
+    writeStr(8, 'WAVE');
+
+    // fmt sub-chunk
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);              // Subchunk1Size (PCM = 16)
+    view.setUint16(20, 1, true);               // AudioFormat (PCM = 1)
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+
+    // data sub-chunk
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    // Convert Float32 → Int16
+    let offset = 44;
+    for (let i = 0; i < pcm.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcm[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      offset += 2;
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+
+  // ── OpenAI Whisper API 呼び出し ───────────────────────────────────
+  async function transcribeWithOpenAI(pcm) {
+    const wavBlob = pcmToWav(pcm);
+    const formData = new FormData();
+    formData.append('file', wavBlob, 'audio.wav');
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'en');
+    formData.append('response_format', 'json');
+
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiApiKey}` },
+      body: formData,
+      signal: AbortSignal.timeout(30000)  // 30秒タイムアウト
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '(詳細不明)');
+      let msg = `OpenAI API エラー ${res.status}`;
+      try {
+        const errJson = JSON.parse(errText);
+        if (errJson.error?.message) msg += `: ${errJson.error.message}`;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const data = await res.json();
+    return data.text ?? '';
+  }
+
+  // ── APIキー保存 & 準備完了 ────────────────────────────────────────
+  function saveApiKey() {
+    const key = apiKeyInput.value.trim();
+    if (!key.startsWith('sk-') || key.length < 20) {
+      apiKeyStatus.textContent = '❌ 無効なキー形式です（sk- で始まる文字列を入力）';
+      apiKeyStatus.style.color = '#ef4444';
+      return;
+    }
+    openaiApiKey = key;
+    setStatus('✅ 準備完了 — 「聞き取り開始」を押してください');
+    btnStart.disabled = false;
+    apiKeyStatus.textContent = '✅ 設定済み';
+    apiKeyStatus.style.color = '#22c55e';
+    pipeLog('OpenAI Whisper API キー設定完了');
+  }
+
+  // ── Start listening ─────────────────────────────────────────────
+  async function startListening() {
+    noAudioWarn.style.display = 'none';
+    setStatus('画面共有ダイアログを開いています…');
+
+    try {
+      // Chrome requires video:true even when we only want audio
+      mediaStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setStatus('画面共有がキャンセルされました');
+      } else {
+        setStatus(`エラー: ${err.message}`, 'error');
+        console.error('[getDisplayMedia]', err);
+      }
+      return;
+    }
+
+    // Stop video — we only need audio
+    mediaStream.getVideoTracks().forEach(t => t.stop());
+
+    const audioTracks = mediaStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      noAudioWarn.style.display = 'block';
+      setStatus('音声なし — 「音声を共有」にチェックしてやり直してください', 'error');
+      return;
+    }
+
+    const audioStream = new MediaStream(audioTracks);
+
+    // ── Audio meter (AnalyserNode) ──
+    startMeter(audioStream);
+
+    // ── PCM直接取得（ScriptProcessor方式）──
+    // VAD（音声区間検出）チャンキング
+    // 無音が続いたタイミングで切る → 話の切れ目で自然にチャンクが区切られる
+    const FRAME      = 4096;
+    const SR         = 16000;
+    const MIN_SPEECH = SR * 1;          // 最低1秒の音声が溜まってから送る
+    const MAX_SPEECH = SR * parseInt(chunkSelect.value, 10) / 1000; // 設定値が最大
+    const VAD_THR    = 0.003;           // 無音と判定するRMS閾値
+    const VAD_HOLD   = Math.ceil(SR * 0.7 / FRAME); // 0.7秒の無音でチャンク確定（短い間を文中断と誤認しない）
+    let   silFrames  = 0;               // 連続無音フレーム数
+
+    pcmBuffer    = [];
+    recordingCtx = new AudioContext({ sampleRate: SR });
+
+    const source = recordingCtx.createMediaStreamSource(audioStream);
+    recordingProcessor = recordingCtx.createScriptProcessor(FRAME, 1, 1);
+
+    const flushChunk = (reason) => {
+      if (pcmBuffer.length < MIN_SPEECH / 4) return; // 極端に短い断片は捨てる
+      const chunk = new Float32Array(pcmBuffer.splice(0, pcmBuffer.length));
+      silFrames = 0;
+      chunkQueue.push(chunk);
+      if (!isProcessingChunk) processNextChunk();
+    };
+
+    recordingProcessor.onaudioprocess = (e) => {
+      if (!isListening) return;
+      const samples  = e.inputBuffer.getChannelData(0);
+      const frameRms = Math.sqrt(samples.reduce((s, v) => s + v * v, 0) / samples.length);
+
+      for (let i = 0; i < samples.length; i++) pcmBuffer.push(samples[i]);
+
+      if (frameRms < VAD_THR) {
+        silFrames++;
+        // 無音が一定時間続いて十分な音声がある → 発話終了とみなす
+        if (silFrames >= VAD_HOLD && pcmBuffer.length >= MIN_SPEECH) {
+          flushChunk('無音検出');
+        }
+      } else {
+        silFrames = 0;
+      }
+
+      // 最大長を超えたら強制送出
+      if (pcmBuffer.length >= MAX_SPEECH) {
+        flushChunk('最大長');
+      }
+    };
+
+    // 無音の仮想出力先に接続（スピーカーへの出力を防ぐ）
+    const silentGain = recordingCtx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(recordingProcessor);
+    recordingProcessor.connect(silentGain);
+    silentGain.connect(recordingCtx.destination);
+
+    // ユーザーがブラウザのツールバーから共有停止した場合
+    audioTracks[0].onended = () => { if (isListening) stopListening(); };
+
+    isListening = true;
+    btnStart.style.display = 'none';
+    btnStop.style.display  = 'block';
+    setStatus('🟢 聞き取り中…', 'listening');
+  }
+
+  // ── Stop listening ──────────────────────────────────────────────
+  function stopListening() {
+    if (recordingProcessor) { recordingProcessor.disconnect(); recordingProcessor = null; }
+    if (recordingCtx)       { recordingCtx.close(); recordingCtx = null; }
+    if (mediaStream)        { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    pcmBuffer         = [];
+    translationPaused = false;
+    sentenceBuffer    = '';
+    ttsPending = null;
+    window.speechSynthesis.cancel();  // 読み上げ中なら止める
+    stopMeter();
+    isListening = false;
+    btnStart.style.display = 'block';
+    btnStop.style.display  = 'none';
+    setStatus('停止しました');
+  }
+
+  // ── Audio meter ─────────────────────────────────────────────────
+  function startMeter(stream) {
+    meterWrap.classList.add('active');
+    meterAudioCtx = new AudioContext();
+    const source  = meterAudioCtx.createMediaStreamSource(stream);
+    analyserNode  = meterAudioCtx.createAnalyser();
+    analyserNode.fftSize = 1024;
+    analyserNode.smoothingTimeConstant = 0.6;
+    source.connect(analyserNode);
+
+    const bufLen   = analyserNode.frequencyBinCount;
+    const dataArr  = new Float32Array(bufLen);
+    const waveArr  = new Float32Array(analyserNode.fftSize);
+    const W        = meterCanvas.width  = meterCanvas.offsetWidth * window.devicePixelRatio;
+    const H        = meterCanvas.height = 48 * window.devicePixelRatio;
+    meterCanvas.style.width  = meterCanvas.offsetWidth + 'px';
+    meterCanvas.style.height = '48px';
+
+    function draw() {
+      meterAnimId = requestAnimationFrame(draw);
+
+      // RMS level
+      analyserNode.getFloatTimeDomainData(waveArr);
+      const rms = Math.sqrt(waveArr.reduce((s, v) => s + v * v, 0) / waveArr.length);
+      const db  = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+      const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100)); // -60dB〜0dB → 0〜100%
+      meterBarInner.style.width = pct + '%';
+      meterDb.textContent = isFinite(db) ? db.toFixed(1) + ' dB' : '-- dB';
+
+      // Waveform
+      meterCtx.clearRect(0, 0, W, H);
+      meterCtx.fillStyle = '#0f172a';
+      meterCtx.fillRect(0, 0, W, H);
+      meterCtx.strokeStyle = pct > 5 ? '#38bdf8' : '#334155';
+      meterCtx.lineWidth = 1.5;
+      meterCtx.beginPath();
+      const sliceW = W / waveArr.length;
+      for (let i = 0; i < waveArr.length; i++) {
+        const x = i * sliceW;
+        const y = (waveArr[i] * 0.5 + 0.5) * H;
+        i === 0 ? meterCtx.moveTo(x, y) : meterCtx.lineTo(x, y);
+      }
+      meterCtx.stroke();
+    }
+    draw();
+  }
+
+  function stopMeter() {
+    if (meterAnimId) { cancelAnimationFrame(meterAnimId); meterAnimId = null; }
+    if (meterAudioCtx) { meterAudioCtx.close(); meterAudioCtx = null; }
+    meterWrap.classList.remove('active');
+    meterBarInner.style.width = '0%';
+    meterDb.textContent = '-- dB';
+  }
+
+  // ── Process one audio chunk ─────────────────────────────────────
+  async function processNextChunk() {
+    if (chunkQueue.length === 0) {
+      isProcessingChunk = false;
+      return;
+    }
+
+    isProcessingChunk = true;
+
+    // ── キュー溜まり対策: 古いチャンクを捨てて最新1件だけ残す ──
+    if (chunkQueue.length > 1) {
+      const skipped = chunkQueue.length - 1;
+      chunkQueue.splice(0, skipped);   // 古い分を全部破棄
+      pipeLog(`⏩ ${skipped}チャンクをスキップ（処理が追いつかないため最新優先）`);
+    }
+
+    // Float32Array（PCM直接取得済み）
+    const chunkStart = Date.now();
+    const pcm = chunkQueue.shift();
+
+    try {
+      // 無音チェック（閾値を下げて見逃しを減らす）
+      const rms    = Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length);
+      const dbVal  = rms > 0 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
+      if (rms < 0.001) {
+        pipeSet('whisper', 'skip', `無音スキップ (${dbVal} dB)`);
+        return processNextChunk();
+      }
+
+      // WAV変換してOpenAI Whisper APIへ送信
+      pipeSet('decode', 'active', `WAV変換中… (${(pcm.length / 16000).toFixed(1)}秒)`);
+      const wavBlob = pcmToWav(pcm);
+      pipeSet('decode', 'done', `WAV変換完了 (${(wavBlob.size / 1024).toFixed(0)} KB)`);
+
+      pipeSet('whisper', 'active', `OpenAI Whisper API 送信中… (音量: ${dbVal} dB)`);
+      const text = (await transcribeWithOpenAI(pcm)).trim();
+
+      if (!text || text.length < 3 || /^\[.*\]$/.test(text)) {
+        pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
+        return processNextChunk();
+      }
+
+      // ── ハルシネーション検出（同じフレーズの繰り返し）────────────
+      if (isHallucination(text)) {
+        pipeSet('whisper', 'skip', `ハルシネーション検出（繰り返しパターン）— 破棄`);
+        pipeLog(`🚫 ハルシネーション: "${text.slice(0, 60)}…"`);
+        return processNextChunk();
+      }
+
+      const elapsed = ((Date.now() - chunkStart) / 1000).toFixed(1);
+      pipeSet('whisper', 'done',
+        `認識完了 (${elapsed}秒): "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
+
+      // バッファに追記 → 「聞き取り中」エリアに表示（英語欄とは別）
+      sentenceBuffer = (sentenceBuffer + ' ' + text).trim();
+      bufferArea.style.display = 'block';
+      bufferText.textContent   = sentenceBuffer;
+
+      if (autoTranslate) {
+        // 文末（.!?）検出 OR 15語超 → 翻訳してバッファリセット
+        const wordCount   = sentenceBuffer.split(/\s+/).length;
+        const hasSentEnd  = /[.!?]["']?\s*$/.test(sentenceBuffer);
+        const forcedFlush = wordCount >= 15;
+
+        if (hasSentEnd || forcedFlush) {
+          const toTranslate = sentenceBuffer;
+          sentenceBuffer    = '';
+          bufferText.textContent   = '';
+          bufferArea.style.display = 'none';
+
+          pipeSet('translate', 'active',
+            `翻訳中… (${wordCount}語 / ${hasSentEnd ? '文末検出' : '強制'})`);
+          subtitleText.textContent = '翻訳中…';
+          subtitleText.classList.add('thinking');
+
+          const ja = await translateText(toTranslate);
+
+          // 英語・日本語を同時に更新（常に同期）
+          englishText.textContent = toTranslate;
+          subtitleText.textContent = ja;
+          subtitleText.classList.remove('thinking');
+
+          // 日本語を読み上げ（前の読み上げは自動キャンセル）
+          speak(ja);
+
+          // 遅延表示
+          lastTranslateTime = Date.now();
+          pipeSet('translate', 'done',
+            `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
+          addHistory(toTranslate, ja);
+        } else {
+          pipeSet('translate', 'skip',
+            `蓄積中 (${wordCount}語 — ${hasSentEnd ? '文末待ち' : `あと${15 - wordCount}語`})`);
+        }
+      } else {
+        pipeSet('translate', 'skip', '自動翻訳 OFF');
+        englishText.textContent = sentenceBuffer;
+        addHistory(sentenceBuffer, '（自動翻訳 OFF）');
+        sentenceBuffer = '';
+        bufferArea.style.display = 'none';
+      }
+
+    } catch (err) {
+      pipeLog(`❌ エラー: ${err.message}`);
+      console.error('[processNextChunk]', err);
+    }
+
+    processNextChunk();
+  }
+
+  // ── ハルシネーション検出 ─────────────────────────────────────────
+  // Whisperは音声不明瞭なとき同じフレーズをループする（幻覚出力）
+  // 【短文】1語が3回以上 OR 2語フレーズが2回以上 → ハルシネーション
+  // 【長文】ウィンドウサイズ2〜6単語で同じフレーズが4回以上 → ハルシネーション
+  function isHallucination(text) {
+    const words = text.trim().split(/\s+/);
+
+    // ── 短文チェック（"Thank you. Thank you. Thank you." など）──
+    if (words.length >= 3) {
+      // 1語の繰り返し（句読点込みで正規化）
+      const normalized = words.map(w => w.replace(/[^a-zA-Z0-9]/g, '').toLowerCase());
+      const freq1 = new Map();
+      for (const w of normalized) {
+        if (!w) continue;
+        const c = (freq1.get(w) || 0) + 1;
+        freq1.set(w, c);
+        if (c >= 3) return true;           // 同じ単語が3回以上
+      }
+    }
+    if (words.length >= 4) {
+      // 2語フレーズの繰り返し
+      const seen2 = new Map();
+      for (let i = 0; i <= words.length - 2; i++) {
+        const key = words.slice(i, i + 2).join(' ').toLowerCase().replace(/[^a-z0-9 ]/g, '');
+        const c = (seen2.get(key) || 0) + 1;
+        seen2.set(key, c);
+        if (c >= 2) return true;           // 同じ2語フレーズが2回以上
+      }
+    }
+
+    // ── 長文チェック ──
+    if (words.length >= 10) {
+      for (let w = 2; w <= 6; w++) {
+        const seen = new Map();
+        for (let i = 0; i <= words.length - w; i++) {
+          const key = words.slice(i, i + w).join(' ').toLowerCase();
+          const cnt = (seen.get(key) || 0) + 1;
+          seen.set(key, cnt);
+          if (cnt >= 4) return true;       // 同じフレーズが4回以上 → 幻覚
+        }
+      }
+    }
+    return false;
+  }
+
+  let translationPaused = false;  // 403 発生時に翻訳を一時停止
+  let sentenceBuffer    = '';     // 翻訳待ち英文バッファ（文完成まで貯める）
+
+  // ── 翻訳エンジン：GPT-4o-mini（メイン）+ Google非公式API（フォールバック）──
+
+  // メイン：GPT-4o-mini（同じAPIキーを使用）
+  async function translateViaGPT(en) {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a professional interpreter for business meetings and online conferences. Translate the English speech into natural, fluent Japanese. Preserve the tone and nuance. Output only the Japanese translation with no explanation.'
+          },
+          {
+            role: 'user',
+            content: en
+          }
+        ],
+        max_tokens: 512,
+        temperature: 0.3
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      let msg = `GPT API ${res.status}`;
+      try { const j = JSON.parse(errText); if (j.error?.message) msg += `: ${j.error.message}`; } catch {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    const result = data.choices?.[0]?.message?.content?.trim();
+    if (!result) throw new Error('GPT: empty response');
+    return result;
+  }
+
+  // フォールバック：Google Translate 非公式 API
+  async function translateViaGoogle(en) {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ja&dt=t&q=${encodeURIComponent(en)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`Google ${res.status}`);
+    const data = await res.json();
+    const translated = data[0].map(item => item[0]).filter(Boolean).join('');
+    if (!translated) throw new Error('Google: empty response');
+    return translated;
+  }
+
+  // メイン翻訳関数
+  async function translateText(en) {
+    // GPT-4o-mini を優先
+    try { return await translateViaGPT(en); } catch (e) {
+      pipeLog(`⚠ GPT翻訳 失敗 (${e.message}) → Google翻訳へフォールバック`);
+    }
+    // Google 非公式 API にフォールバック
+    try { return await translateViaGoogle(en); } catch (e) {
+      pipeLog(`⚠ Google翻訳 失敗 (${e.message})`);
+    }
+    return '[翻訳失敗]';
+  }
+
+  // ── History ─────────────────────────────────────────────────────
+  function addHistory(en, ja) {
+    const time = new Date().toLocaleTimeString('ja-JP', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    historyItems.unshift({ en, ja, time });
+    historyList.innerHTML = historyItems.map(it => `
+      <div class="history-item">
+        <div class="h-time">${esc(it.time)}</div>
+        <div class="h-en">${esc(it.en)}</div>
+        <div class="h-ja">${esc(it.ja)}</div>
+      </div>`).join('');
+  }
+
+  // ── Event listeners ─────────────────────────────────────────────
+  btnStart.addEventListener('click', startListening);
+  btnStop.addEventListener('click', stopListening);
+
+  btnClear.addEventListener('click', () => {
+    historyItems = [];
+    historyList.innerHTML = '<div style="color:#475569;font-size:0.85rem;">（履歴はここに表示されます）</div>';
+    englishText.textContent  = '（聞き取った英語がここに表示されます）';
+    subtitleText.textContent = '日本語の字幕がここに表示されます';
+    subtitleText.classList.remove('thinking');
+  });
+
+  slider.addEventListener('input', () => {
+    const px = slider.value;
+    sliderLabel.textContent      = px + 'px';
+    subtitleText.style.fontSize  = px + 'px';
+  });
+
+  atToggle.addEventListener('change', () => { autoTranslate = atToggle.checked; });
+
+  ttsToggle.addEventListener('change', () => {
+    ttsEnabled = ttsToggle.checked;
+    if (!ttsEnabled) { ttsPending = null; window.speechSynthesis.cancel(); }
+    // 初回ONのときgetVoices()がロードされていない場合があるので事前ロード
+    if (ttsEnabled) window.speechSynthesis.getVoices();
+  });
+
+  // APIキー入力欄の変化でボタン有効/無効を切り替え
+  apiKeyInput.addEventListener('input', () => {
+    const key = apiKeyInput.value.trim();
+    btnSaveKey.disabled = key.length < 10;
+    // キーが変わったら保存済み状態をリセット
+    if (key !== openaiApiKey) {
+      apiKeyStatus.textContent = '';
+      btnStart.disabled = true;
+      setStatus('OpenAI APIキーを入力して「準備完了」を押してください');
+    }
+  });
+
+  apiKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveApiKey();
+  });
+
+  btnSaveKey.addEventListener('click', saveApiKey);
+
+  // ── 遅延タイマー（1秒ごとに「最後の翻訳から○秒」を更新）───────────
+  setInterval(() => {
+    if (!lastTranslateTime) { delayLabel.textContent = ''; return; }
+    const sec = Math.round((Date.now() - lastTranslateTime) / 1000);
+    delayLabel.textContent = sec < 5 ? '' : `最後の翻訳: ${sec}秒前`;
+  }, 1000);
+
+  // ── Init（APIキー未設定 → 開始ボタンは無効のまま）──────────────────
+  // ページ再読込のたびにAPIキーの入力が必要（セキュリティのためlocalStorageには保存しない）
+  btnStart.disabled = true;
+</script>
+</body>
+</html>
