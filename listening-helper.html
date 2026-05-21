@@ -715,9 +715,6 @@
       const chunk = new Float32Array(pcmBuffer.splice(0, pcmBuffer.length));
       silFrames = 0;
       chunkQueue.push(chunk);
-      pipeSet('record', 'done',
-        `録音チャンク [${reason}] ${(chunk.length / SR).toFixed(1)}秒 / ${chunk.length.toLocaleString()}サンプル`);
-      psQueue.textContent = chunkQueue.length;
       if (!isProcessingChunk) processNextChunk();
     };
 
@@ -850,7 +847,6 @@
     // Float32Array（PCM直接取得済み）
     const chunkStart = Date.now();
     const pcm = chunkQueue.shift();
-    psQueue.textContent = chunkQueue.length;
 
     try {
       // 無音チェック（閾値を下げて見逃しを減らす）
