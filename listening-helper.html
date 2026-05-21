@@ -565,7 +565,11 @@ self.onmessage = async ({ data: msg }) => {
         language: 'english',
         task: 'transcribe',
         chunk_length_s: 30,
-        return_timestamps: false
+        return_timestamps: false,
+        num_beams: 1,          // greedy復号（ビームサーチ廃止）→ 2〜3倍高速
+        temperature: 0.0,      // 確定的出力
+        compression_ratio_threshold: 2.0,  // 高圧縮比（ハルシネーション）を弾く
+        no_speech_threshold: 0.6,          // 無音確率が高い場合はスキップ
       });
       self.postMessage({ type: 'result', payload: result.text ?? '' });
     } catch (err) {
@@ -811,7 +815,7 @@ self.onmessage = async ({ data: msg }) => {
     const MIN_SPEECH = SR * 1;          // 最低1秒の音声が溜まってから送る
     const MAX_SPEECH = SR * parseInt(chunkSelect.value, 10) / 1000; // 設定値が最大
     const VAD_THR    = 0.003;           // 無音と判定するRMS閾値
-    const VAD_HOLD   = Math.ceil(SR * 0.4 / FRAME); // 0.4秒の無音でチャンク確定
+    const VAD_HOLD   = Math.ceil(SR * 0.7 / FRAME); // 0.7秒の無音でチャンク確定（短い間を文中断と誤認しない）
     let   silFrames  = 0;               // 連続無音フレーム数
 
     pcmBuffer    = [];
@@ -882,6 +886,7 @@ self.onmessage = async ({ data: msg }) => {
     pendingResolve    = null;
     pendingReject     = null;
     translationPaused = false;
+    sentenceBuffer    = '';
     // Worker は loadModel で再利用するため terminate しない
     if (whisperWorker) whisperWorker.onmessage = onWorkerMessage;
     stopMeter();
@@ -1004,21 +1009,39 @@ self.onmessage = async ({ data: msg }) => {
       pipeSet('whisper', 'done',
         `認識完了 (${elapsed}秒): "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
 
-      englishText.textContent = text;
+      // バッファに追記して英文エリアに表示
+      sentenceBuffer = (sentenceBuffer + ' ' + text).trim();
+      englishText.textContent = sentenceBuffer;
 
       if (autoTranslate) {
-        pipeSet('translate', 'active', '翻訳中…');
-        subtitleText.textContent = '翻訳中…';
-        subtitleText.classList.add('thinking');
-        const ja = await translateText(text);
-        pipeSet('translate', 'done',
-          `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
-        subtitleText.textContent = ja;
-        subtitleText.classList.remove('thinking');
-        addHistory(text, ja);
+        // ── センテンスバッファ翻訳 ──────────────────────────────────
+        // 文末記号（.!?）があるか、単語数が20超えたら翻訳してバッファをリセット
+        const wordCount   = sentenceBuffer.split(/\s+/).length;
+        const hasSentEnd  = /[.!?]["']?\s*$/.test(sentenceBuffer);
+        const forcedFlush = wordCount >= 20;
+
+        if (hasSentEnd || forcedFlush) {
+          const toTranslate = sentenceBuffer;
+          sentenceBuffer    = '';
+
+          pipeSet('translate', 'active',
+            `翻訳中… (${wordCount}語 / ${hasSentEnd ? '文末検出' : '強制フラッシュ'})`);
+          subtitleText.textContent = '翻訳中…';
+          subtitleText.classList.add('thinking');
+          const ja = await translateText(toTranslate);
+          pipeSet('translate', 'done',
+            `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
+          subtitleText.textContent = ja;
+          subtitleText.classList.remove('thinking');
+          addHistory(toTranslate, ja);
+        } else {
+          pipeSet('translate', 'skip',
+            `バッファ蓄積中 (${wordCount}語 — 文末待ち)`);
+        }
       } else {
         pipeSet('translate', 'skip', '自動翻訳 OFF');
-        addHistory(text, '（自動翻訳 OFF）');
+        addHistory(sentenceBuffer, '（自動翻訳 OFF）');
+        sentenceBuffer = '';
       }
 
     } catch (err) {
@@ -1049,6 +1072,7 @@ self.onmessage = async ({ data: msg }) => {
   }
 
   let translationPaused = false;  // 403 発生時に翻訳を一時停止
+  let sentenceBuffer    = '';     // 翻訳待ち英文バッファ（文完成まで貯める）
 
   async function translateText(en) {
     if (translationPaused) return '（翻訳上限：下の設定欄にメールを入力してください）';
