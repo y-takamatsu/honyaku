@@ -146,7 +146,8 @@
 
     /* ── Processing indicator ── */
     #processing-indicator {
-      display: none;
+      display: flex;          /* 常にスペースを確保（消えてもレイアウト不変） */
+      visibility: hidden;     /* 非表示時は透明にするだけ */
       align-items: center;
       gap: 8px;
       color: #64748b;
@@ -967,12 +968,12 @@
   async function processNextChunk() {
     if (chunkQueue.length === 0) {
       isProcessingChunk           = false;
-      procIndicator.style.display = 'none';
+      procIndicator.style.visibility = 'hidden';
       return;
     }
 
     isProcessingChunk           = true;
-    procIndicator.style.display = 'flex';
+    procIndicator.style.visibility = 'visible';
 
     // ── キュー溜まり対策: 古いチャンクを捨てて最新1件だけ残す ──
     if (chunkQueue.length > 1) {
