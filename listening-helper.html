@@ -535,17 +535,20 @@
   env.allowLocalModels = false;   // Use Hugging Face Hub models
 
   // ── State ──────────────────────────────────────────────────────
-  let transcriber       = null;
-  let mediaStream       = null;
-  let mediaRecorder     = null;
-  let isListening       = false;
-  let chunkQueue        = [];
-  let isProcessingChunk = false;
-  let autoTranslate     = true;
-  let historyItems      = [];
-  let meterAnimId       = null;
-  let analyserNode      = null;
-  let meterAudioCtx     = null;
+  let transcriber        = null;
+  let mediaStream        = null;
+  let isListening        = false;
+  let chunkQueue         = [];
+  let isProcessingChunk  = false;
+  let autoTranslate      = true;
+  let historyItems       = [];
+  let meterAnimId        = null;
+  let analyserNode       = null;
+  let meterAudioCtx      = null;
+  // PCM直接取得用（MediaRecorder廃止）
+  let recordingCtx       = null;
+  let recordingProcessor = null;
+  let pcmBuffer          = [];
 
   // ── DOM refs ────────────────────────────────────────────────────
   const btnStart      = document.getElementById('btn-start');
@@ -721,40 +724,56 @@
     // ── Audio meter (AnalyserNode) ──
     startMeter(audioStream);
 
-    // Pick best supported MIME type
-    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', '']
-      .find(m => !m || MediaRecorder.isTypeSupported(m)) ?? '';
+    // ── PCM直接取得（ScriptProcessor方式）──
+    // MediaRecorder + decodeAudioData はWebM形式の問題でデコード失敗するため廃止。
+    // ScriptProcessorでFloat32 PCMを直接取得しWhisperに渡す。
+    const chunkSamples = Math.round(parseInt(chunkSelect.value, 10) / 1000 * 16000);
+    pcmBuffer    = [];
+    recordingCtx = new AudioContext({ sampleRate: 16000 });
 
-    mediaRecorder = new MediaRecorder(audioStream, mimeType ? { mimeType } : {});
+    const source = recordingCtx.createMediaStreamSource(audioStream);
+    recordingProcessor = recordingCtx.createScriptProcessor(4096, 1, 1);
 
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 100) {
-        chunkQueue.push(e.data);
-        pipeSet('record', 'done', `録音チャンク受信 (${(e.data.size/1024).toFixed(1)} KB)`);
+    recordingProcessor.onaudioprocess = (e) => {
+      if (!isListening) return;
+      const samples = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < samples.length; i++) pcmBuffer.push(samples[i]);
+
+      if (pcmBuffer.length >= chunkSamples) {
+        const chunk = new Float32Array(pcmBuffer.splice(0, chunkSamples));
+        chunkQueue.push(chunk);
+        pipeSet('record', 'done',
+          `録音チャンク受信 (${(chunk.length / 16000).toFixed(0)}秒 / ${chunk.length.toLocaleString()}サンプル)`);
         psQueue.textContent = chunkQueue.length;
         if (!isProcessingChunk) processNextChunk();
       }
     };
 
-    // User ends sharing from browser toolbar
+    // 無音の仮想出力先に接続（スピーカーへの出力を防ぐ）
+    const silentGain = recordingCtx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(recordingProcessor);
+    recordingProcessor.connect(silentGain);
+    silentGain.connect(recordingCtx.destination);
+
+    // ユーザーがブラウザのツールバーから共有停止した場合
     audioTracks[0].onended = () => { if (isListening) stopListening(); };
 
-    const chunkMs = parseInt(chunkSelect.value, 10);
-    mediaRecorder.start(chunkMs);
     isListening = true;
-
     btnStart.style.display     = 'none';
     btnStop.style.display      = 'block';
     pipelineWrap.style.display = 'block';
     pipeReset();
-    pipeLog('聞き取り開始 — 5秒ごとにチャンク処理');
+    pipeLog(`聞き取り開始 — ${(chunkSamples/16000).toFixed(0)}秒ごとにWhisper処理（PCM直接取得）`);
     setStatus('🟢 聞き取り中…', 'listening');
   }
 
   // ── Stop listening ──────────────────────────────────────────────
   function stopListening() {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    if (recordingProcessor) { recordingProcessor.disconnect(); recordingProcessor = null; }
+    if (recordingCtx)       { recordingCtx.close(); recordingCtx = null; }
+    if (mediaStream)        { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    pcmBuffer = [];
     stopMeter();
     pipeReset();
     pipelineWrap.style.display = 'none';
@@ -830,38 +849,24 @@
     isProcessingChunk           = true;
     procIndicator.style.display = 'flex';
 
-    const blob = chunkQueue.shift();
+    // Float32Array（PCM直接取得済み）
+    const pcm = chunkQueue.shift();
     psQueue.textContent = chunkQueue.length;
 
     try {
-      // Step 1: デコード
-      pipeSet('decode', 'active', `音声デコード中 (${(blob.size/1024).toFixed(1)} KB)`);
-      const arrayBuffer = await blob.arrayBuffer();
-      const audioCtx    = new AudioContext({ sampleRate: 16000 });
-
-      let audioBuffer;
-      try {
-        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      } catch (decErr) {
-        pipeSet('decode', 'skip', `デコード失敗: ${decErr.message}`);
-        await audioCtx.close();
-        return processNextChunk();
-      }
-
-      // Mono Float32 PCM at 16 kHz — required by Whisper
-      const pcm = audioBuffer.getChannelData(0);
-      await audioCtx.close();
-      pipeSet('decode', 'done', `デコード完了 (${audioBuffer.duration.toFixed(1)}秒, サンプル数:${pcm.length.toLocaleString()})`);
+      // デコード不要 — PCMをそのまま使う
+      pipeSet('decode', 'done',
+        `PCM直接取得 (${(pcm.length / 16000).toFixed(1)}秒 / ${pcm.length.toLocaleString()}サンプル)`);
 
       // 無音チェック
-      const rms = Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length);
-      const dbVal = rms > 0 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
+      const rms    = Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length);
+      const dbVal  = rms > 0 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
       if (rms < 0.004) {
-        pipeSet('whisper', 'skip', `無音スキップ (RMS: ${dbVal} dB < -48 dB)`);
+        pipeSet('whisper', 'skip', `無音スキップ (${dbVal} dB < -48 dB)`);
         return processNextChunk();
       }
 
-      // Step 2: Whisper
+      // Whisper認識
       pipeSet('whisper', 'active', `Whisper認識中… (音量: ${dbVal} dB)`);
       const result = await transcriber(pcm, {
         language: 'english',
@@ -872,22 +877,22 @@
 
       const text = (result.text ?? '').trim();
 
-      // Filter junk output
       if (!text || text.length < 3 || /^\[.*\]$/.test(text)) {
         pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
         return processNextChunk();
       }
-      pipeSet('whisper', 'done', `認識完了: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
+      pipeSet('whisper', 'done',
+        `認識完了: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
 
       englishText.textContent = text;
 
       if (autoTranslate) {
-        // Step 3: 翻訳
         pipeSet('translate', 'active', '翻訳中…');
         subtitleText.textContent = '翻訳中…';
         subtitleText.classList.add('thinking');
         const ja = await translateText(text);
-        pipeSet('translate', 'done', `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
+        pipeSet('translate', 'done',
+          `翻訳完了: "${ja.slice(0, 40)}${ja.length > 40 ? '…' : ''}"`);
         subtitleText.textContent = ja;
         subtitleText.classList.remove('thinking');
         addHistory(text, ja);
