@@ -436,7 +436,7 @@
     <div class="pipe-step" id="ps-whisper">🤖 Whisper</div>
     <div style="color:#334155">→</div>
     <div class="pipe-step" id="ps-translate">🌐 翻訳</div>
-    <div style="margin-left:auto; font-size:0.78rem; color:#64748b;">キュー: <span id="ps-queue">0</span>件</div>
+    <div style="margin-left:auto; font-size:0.78rem; color:#64748b;">キュー: <span id="ps-queue">0</span>件 <span id="ps-queue-warn" style="display:none;color:#ef4444;">⚠ 遅延中</span></div>
   </div>
   <div id="ps-detail" style="margin-top:8px; font-size:0.82rem; color:#94a3b8; min-height:18px;"></div>
   <div id="ps-log" style="margin-top:8px; max-height:80px; overflow-y:auto; font-size:0.75rem; font-family:monospace; color:#475569;"></div>
@@ -500,16 +500,16 @@
     <div class="setting-row">
       <label>AIモデル</label>
       <select id="model-select">
-        <option value="Xenova/whisper-tiny.en">whisper-tiny.en（~40MB・高速）</option>
-        <option value="Xenova/whisper-base.en" selected>whisper-base.en（~80MB・推奨）</option>
-        <option value="Xenova/whisper-small.en">whisper-small.en（~250MB・高精度）</option>
+        <option value="Xenova/whisper-tiny.en" selected>whisper-tiny.en（~40MB・高速・推奨）</option>
+        <option value="Xenova/whisper-base.en">whisper-base.en（~80MB・高精度）</option>
+        <option value="Xenova/whisper-small.en">whisper-small.en（~250MB・最高精度）</option>
       </select>
     </div>
     <div class="setting-row">
       <label>録音チャンク</label>
       <select id="chunk-duration">
-        <option value="3000">3秒（低遅延）</option>
-        <option value="5000" selected>5秒（推奨）</option>
+        <option value="3000" selected>3秒（推奨）</option>
+        <option value="5000">5秒</option>
         <option value="8000">8秒（低負荷）</option>
       </select>
     </div>
@@ -607,6 +607,7 @@ self.onmessage = async ({ data: msg }) => {
   const psWhisper     = document.getElementById('ps-whisper');
   const psTranslate   = document.getElementById('ps-translate');
   const psQueue       = document.getElementById('ps-queue');
+  const psQueueWarn   = document.getElementById('ps-queue-warn');
   const psDetail      = document.getElementById('ps-detail');
   const psLog         = document.getElementById('ps-log');
   let   stepTimer     = null;
@@ -664,6 +665,7 @@ self.onmessage = async ({ data: msg }) => {
       if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
     }
     psQueue.textContent = chunkQueue.length;
+    psQueueWarn.style.display = chunkQueue.length > 1 ? 'inline' : 'none';
   }
 
   function pipeReset() {
@@ -920,7 +922,15 @@ self.onmessage = async ({ data: msg }) => {
     isProcessingChunk           = true;
     procIndicator.style.display = 'flex';
 
+    // ── キュー溜まり対策: 古いチャンクを捨てて最新1件だけ残す ──
+    if (chunkQueue.length > 1) {
+      const skipped = chunkQueue.length - 1;
+      chunkQueue.splice(0, skipped);   // 古い分を全部破棄
+      pipeLog(`⏩ ${skipped}チャンクをスキップ（処理が追いつかないため最新優先）`);
+    }
+
     // Float32Array（PCM直接取得済み）
+    const chunkStart = Date.now();
     const pcm = chunkQueue.shift();
     psQueue.textContent = chunkQueue.length;
 
@@ -929,11 +939,11 @@ self.onmessage = async ({ data: msg }) => {
       pipeSet('decode', 'done',
         `PCM直接取得 (${(pcm.length / 16000).toFixed(1)}秒 / ${pcm.length.toLocaleString()}サンプル)`);
 
-      // 無音チェック
+      // 無音チェック（閾値を下げて見逃しを減らす）
       const rms    = Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length);
       const dbVal  = rms > 0 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
-      if (rms < 0.004) {
-        pipeSet('whisper', 'skip', `無音スキップ (${dbVal} dB < -48 dB)`);
+      if (rms < 0.001) {
+        pipeSet('whisper', 'skip', `無音スキップ (${dbVal} dB)`);
         return processNextChunk();
       }
 
@@ -945,8 +955,9 @@ self.onmessage = async ({ data: msg }) => {
         pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
         return processNextChunk();
       }
+      const elapsed = ((Date.now() - chunkStart) / 1000).toFixed(1);
       pipeSet('whisper', 'done',
-        `認識完了: "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
+        `認識完了 (${elapsed}秒): "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
 
       englishText.textContent = text;
 
