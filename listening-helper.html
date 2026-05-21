@@ -503,12 +503,19 @@
       <label>字幕サイズ</label>
       <input type="range" id="font-size-slider" min="16" max="64" value="32">
       <span id="font-size-label">32px</span>
-      <div class="toggle-row" style="margin-left:auto;">
+      <div class="toggle-row">
         <label class="toggle">
           <input type="checkbox" id="auto-translate-toggle" checked>
           <span class="toggle-slider"></span>
         </label>
         <span style="font-size:0.8rem;color:#64748b;">自動翻訳</span>
+      </div>
+      <div class="toggle-row" style="margin-left:12px;">
+        <label class="toggle">
+          <input type="checkbox" id="tts-toggle">
+          <span class="toggle-slider"></span>
+        </label>
+        <span style="font-size:0.8rem;color:#64748b;">🔊 読み上げ</span>
       </div>
     </div>
     <div id="subtitle-text">日本語の字幕がここに表示されます</div>
@@ -572,6 +579,7 @@
   let chunkQueue         = [];
   let isProcessingChunk  = false;
   let autoTranslate      = true;
+  let ttsEnabled         = false;  // 読み上げON/OFF
   let historyItems       = [];
   let meterAnimId        = null;
   let analyserNode       = null;
@@ -601,6 +609,7 @@
   const slider        = document.getElementById('font-size-slider');
   const sliderLabel   = document.getElementById('font-size-label');
   const atToggle      = document.getElementById('auto-translate-toggle');
+  const ttsToggle     = document.getElementById('tts-toggle');
   const noAudioWarn   = document.getElementById('no-audio-warning');
   const meterWrap     = document.getElementById('audio-meter-wrap');
   const pipelineWrap  = document.getElementById('pipeline-wrap');
@@ -685,6 +694,28 @@
     psLog.prepend(line);
     // keep max 20 lines
     while (psLog.children.length > 20) psLog.removeChild(psLog.lastChild);
+  }
+
+  // ── 日本語読み上げ（Web Speech API）────────────────────────────────
+  function speak(text) {
+    if (!ttsEnabled) return;
+    // 前の読み上げを即座にキャンセル
+    window.speechSynthesis.cancel();
+
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang  = 'ja-JP';
+    utter.rate  = 1.2;   // 1.2倍速
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+
+    // 日本語音声を優先して選択
+    const voices = window.speechSynthesis.getVoices();
+    const jaVoice = voices.find(v => v.lang === 'ja-JP' && v.localService)
+                 || voices.find(v => v.lang === 'ja-JP')
+                 || voices.find(v => v.lang.startsWith('ja'));
+    if (jaVoice) utter.voice = jaVoice;
+
+    window.speechSynthesis.speak(utter);
   }
 
   // ── PCM Float32Array → WAV Blob 変換 ────────────────────────────
@@ -900,6 +931,7 @@
     pcmBuffer         = [];
     translationPaused = false;
     sentenceBuffer    = '';
+    window.speechSynthesis.cancel();  // 読み上げ中なら止める
     stopMeter();
     pipeReset();
     pipelineWrap.style.display = 'none';
@@ -1048,6 +1080,9 @@
           englishText.textContent = toTranslate;
           subtitleText.textContent = ja;
           subtitleText.classList.remove('thinking');
+
+          // 日本語を読み上げ（前の読み上げは自動キャンセル）
+          speak(ja);
 
           // 遅延表示
           lastTranslateTime = Date.now();
@@ -1219,6 +1254,13 @@
   });
 
   atToggle.addEventListener('change', () => { autoTranslate = atToggle.checked; });
+
+  ttsToggle.addEventListener('change', () => {
+    ttsEnabled = ttsToggle.checked;
+    if (!ttsEnabled) window.speechSynthesis.cancel();
+    // 初回ONのときgetVoices()がロードされていない場合があるので事前ロード
+    if (ttsEnabled) window.speechSynthesis.getVoices();
+  });
 
   // APIキー入力欄の変化でボタン有効/無効を切り替え
   apiKeyInput.addEventListener('input', () => {
