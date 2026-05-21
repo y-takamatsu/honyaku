@@ -364,7 +364,9 @@
     }
     .setting-row label { font-size: 0.85rem; color: #94a3b8; min-width: 100px; }
     .setting-row select,
-    .setting-row input[type="email"] {
+    .setting-row input[type="email"],
+    .setting-row input[type="password"],
+    .setting-row input[type="text"] {
       background: #0f172a;
       border: 1px solid #334155;
       color: #e2e8f0;
@@ -373,6 +375,18 @@
       font-size: 0.85rem;
       flex: 1;
     }
+    #btn-save-key {
+      background: #0ea5e9;
+      color: #fff;
+      padding: 8px 20px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    #btn-save-key:hover { background: #0284c7; }
+    #btn-save-key:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
 
     footer {
       text-align: center;
@@ -392,7 +406,7 @@
 <!-- Status -->
 <div id="status-bar">
   <div class="status-dot" id="status-dot"></div>
-  <span id="status-text">AIモデルを読み込んでいます…</span>
+  <span id="status-text">OpenAI APIキーを入力して「準備完了」を押してください</span>
 </div>
 
 <!-- Progress -->
@@ -436,7 +450,7 @@
   <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
     <div class="pipe-step" id="ps-record">⏺ 録音</div>
     <div style="color:#334155">→</div>
-    <div class="pipe-step" id="ps-decode">🔓 デコード</div>
+    <div class="pipe-step" id="ps-decode">🎵 WAV変換</div>
     <div style="color:#334155">→</div>
     <div class="pipe-step" id="ps-whisper">🤖 Whisper</div>
     <div style="color:#334155">→</div>
@@ -511,12 +525,15 @@
   <div class="settings-area">
     <h3>設定</h3>
     <div class="setting-row">
-      <label>AIモデル</label>
-      <select id="model-select">
-        <option value="Xenova/whisper-tiny.en" selected>whisper-tiny.en（~40MB・高速・推奨）</option>
-        <option value="Xenova/whisper-base.en">whisper-base.en（~80MB・高精度）</option>
-        <option value="Xenova/whisper-small.en">whisper-small.en（~250MB・最高精度）</option>
-      </select>
+      <label>OpenAI APIキー</label>
+      <input type="password" id="api-key-input" placeholder="sk-..." autocomplete="off" spellcheck="false">
+    </div>
+    <div class="setting-row" style="margin-top:-4px;">
+      <label></label>
+      <div style="display:flex;align-items:center;gap:10px;flex:1;flex-wrap:wrap;">
+        <button id="btn-save-key" disabled>✅ 準備完了にする</button>
+        <span id="api-key-status" style="font-size:0.8rem;color:#64748b;"></span>
+      </div>
     </div>
     <div class="setting-row">
       <label>最大チャンク長</label>
@@ -530,62 +547,25 @@
       ※ 無音を検出したタイミングで自動的にチャンクが確定されます（VAD）
     </div>
     <div style="font-size:0.78rem;color:#475569;margin-top:4px;">
-      ※ モデルを変更すると再ダウンロードが始まります<br>
-      ✅ 翻訳エンジン: <strong style="color:#38bdf8;">Lingva Translate</strong>（登録不要・無制限・Google翻訳相当）
+      🤖 音声認識エンジン: <strong style="color:#38bdf8;">OpenAI Whisper API</strong>（whisper-1 / $0.006/分）<br>
+      ✅ 翻訳エンジン: <strong style="color:#38bdf8;">Lingva Translate</strong>（登録不要・無制限・Google翻訳相当）<br>
+      🔑 APIキーはこのページ内にのみ保存されます（外部サーバーには送信しません）
     </div>
   </div>
 
 </div>
 
-<footer>Listening Helper — Phase 2 | Whisper.js (Xenova/transformers) + MyMemory API | Chrome 専用</footer>
+<footer>Listening Helper — Phase 2 | OpenAI Whisper API + Lingva Translate | Chrome 専用</footer>
 
-<script type="module">
+<script>
   // ─────────────────────────────────────────────────────────────
-  //  Whisper.js は Web Worker 内で動かす（メインスレッドのフリーズを防止）
+  //  OpenAI Whisper API を直接呼び出す（ブラウザ完結型）
+  //  音声認識: https://api.openai.com/v1/audio/transcriptions
+  //  モデル: whisper-1 / 言語: en / 料金: $0.006/分
   // ─────────────────────────────────────────────────────────────
-
-  // Worker のインラインコード（Blob URL で生成）
-  const WORKER_CODE = `
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
-env.allowLocalModels = false;
-
-let transcriber = null;
-
-self.onmessage = async ({ data: msg }) => {
-  if (msg.type === 'load') {
-    try {
-      transcriber = await pipeline('automatic-speech-recognition', msg.modelId, {
-        progress_callback: (p) => self.postMessage({ type: 'progress', payload: p })
-      });
-      self.postMessage({ type: 'ready' });
-    } catch (err) {
-      self.postMessage({ type: 'error', payload: err.message });
-    }
-  } else if (msg.type === 'transcribe') {
-    try {
-      const pcm    = new Float32Array(msg.pcmBuffer);
-      const result = await transcriber(pcm, {
-        language: 'english',
-        task: 'transcribe',
-        chunk_length_s: 30,
-        return_timestamps: false,
-        num_beams: 1,          // greedy復号（ビームサーチ廃止）→ 2〜3倍高速
-        temperature: 0.0,      // 確定的出力
-        compression_ratio_threshold: 2.0,  // 高圧縮比（ハルシネーション）を弾く
-        no_speech_threshold: 0.6,          // 無音確率が高い場合はスキップ
-      });
-      self.postMessage({ type: 'result', payload: result.text ?? '' });
-    } catch (err) {
-      self.postMessage({ type: 'error', payload: err.message });
-    }
-  }
-};
-`;
 
   // ── State ──────────────────────────────────────────────────────
-  let whisperWorker      = null;   // Worker インスタンス
-  let pendingResolve     = null;   // transcribeInWorker の Promise resolver
-  let pendingReject      = null;
+  let openaiApiKey       = '';     // OpenAI APIキー
   let mediaStream        = null;
   let isListening        = false;
   let chunkQueue         = [];
@@ -637,10 +617,11 @@ self.onmessage = async ({ data: msg }) => {
   const meterDb       = document.getElementById('meter-db');
   const meterCanvas   = document.getElementById('meter-canvas');
   const meterCtx      = meterCanvas.getContext('2d');
-  const procIndicator = document.getElementById('processing-indicator');
-  const modelSelect   = document.getElementById('model-select');
-  const chunkSelect   = document.getElementById('chunk-duration');
-  const emailInput    = document.getElementById('email-input');
+  const procIndicator  = document.getElementById('processing-indicator');
+  const apiKeyInput    = document.getElementById('api-key-input');
+  const btnSaveKey     = document.getElementById('btn-save-key');
+  const apiKeyStatus   = document.getElementById('api-key-status');
+  const chunkSelect    = document.getElementById('chunk-duration');
 
   // ── UI helpers ──────────────────────────────────────────────────
   function setStatus(msg, state = '') {
@@ -705,73 +686,99 @@ self.onmessage = async ({ data: msg }) => {
     while (psLog.children.length > 20) psLog.removeChild(psLog.lastChild);
   }
 
-  // ── Worker メッセージハンドラ（聞き取り中）────────────────────────
-  function onWorkerMessage({ data: msg }) {
-    if (msg.type === 'result') {
-      if (pendingResolve) { pendingResolve(msg.payload); pendingResolve = pendingReject = null; }
-    } else if (msg.type === 'error') {
-      if (pendingReject)  { pendingReject(new Error(msg.payload)); pendingResolve = pendingReject = null; }
+  // ── PCM Float32Array → WAV Blob 変換 ────────────────────────────
+  // OpenAI API は audio/wav を受け付ける（16kHz, モノラル, 16bit PCM）
+  function pcmToWav(pcm, sampleRate = 16000) {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = pcm.length * bytesPerSample;
+    const bufferSize = 44 + dataSize;
+
+    const buffer = new ArrayBuffer(bufferSize);
+    const view = new DataView(buffer);
+
+    // Helper: write string as ASCII bytes
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    // RIFF header
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);    // ChunkSize
+    writeStr(8, 'WAVE');
+
+    // fmt sub-chunk
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);              // Subchunk1Size (PCM = 16)
+    view.setUint16(20, 1, true);               // AudioFormat (PCM = 1)
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+
+    // data sub-chunk
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    // Convert Float32 → Int16
+    let offset = 44;
+    for (let i = 0; i < pcm.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcm[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      offset += 2;
     }
+
+    return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  // PCM を Worker に送り、認識結果を Promise で受け取る
-  function transcribeInWorker(pcm) {
-    return new Promise((resolve, reject) => {
-      pendingResolve = resolve;
-      pendingReject  = reject;
-      // pcm.buffer を転送（コピーなしで Worker へ渡す）
-      whisperWorker.postMessage({ type: 'transcribe', pcmBuffer: pcm.buffer }, [pcm.buffer]);
+  // ── OpenAI Whisper API 呼び出し ───────────────────────────────────
+  async function transcribeWithOpenAI(pcm) {
+    const wavBlob = pcmToWav(pcm);
+    const formData = new FormData();
+    formData.append('file', wavBlob, 'audio.wav');
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'en');
+    formData.append('response_format', 'json');
+
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiApiKey}` },
+      body: formData,
+      signal: AbortSignal.timeout(30000)  // 30秒タイムアウト
     });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '(詳細不明)');
+      let msg = `OpenAI API エラー ${res.status}`;
+      try {
+        const errJson = JSON.parse(errText);
+        if (errJson.error?.message) msg += `: ${errJson.error.message}`;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const data = await res.json();
+    return data.text ?? '';
   }
 
-  // ── Load Whisper model（Worker 起動）──────────────────────────────
-  function loadModel() {
-    const modelId = modelSelect.value;
-    setStatus(`AIモデルを準備中… (${modelId.split('/')[1]})`);
-    btnStart.disabled = true;
-
-    // 既存 Worker があれば終了
-    if (whisperWorker) { whisperWorker.terminate(); whisperWorker = null; }
-
-    // インライン Worker を Blob URL で生成
-    const blob = new Blob([WORKER_CODE], { type: 'text/javascript' });
-    const url  = URL.createObjectURL(blob);
-    whisperWorker = new Worker(url, { type: 'module' });
-    URL.revokeObjectURL(url);
-
-    const fileProgress = {};
-
-    // ロード完了まで専用ハンドラで進捗を表示
-    whisperWorker.onmessage = ({ data: msg }) => {
-      if (msg.type === 'progress') {
-        const p = msg.payload;
-        if (p.status === 'downloading' || p.status === 'progress') {
-          const key  = p.file ?? 'main';
-          fileProgress[key] = p.progress ?? 0;
-          const vals = Object.values(fileProgress);
-          const avg  = vals.reduce((a, b) => a + b, 0) / vals.length;
-          showProgress(`ダウンロード中: ${Math.round(avg)}%`, avg);
-        } else if (p.status === 'loading') {
-          showProgress('モデルをロード中…', 92);
-        } else if (p.status === 'ready') {
-          showProgress('完了', 100);
-        }
-      } else if (msg.type === 'ready') {
-        setStatus('準備完了 — 「聞き取り開始」を押してください');
-        btnStart.disabled = false;
-        // ロード完了後は onWorkerMessage に切り替え
-        whisperWorker.onmessage = onWorkerMessage;
-      } else if (msg.type === 'error') {
-        setStatus(`モデル読み込みエラー: ${msg.payload}`, 'error');
-      }
-    };
-
-    whisperWorker.onerror = (e) => {
-      setStatus(`Workerエラー: ${e.message}`, 'error');
-      console.error('[Worker]', e);
-    };
-
-    whisperWorker.postMessage({ type: 'load', modelId });
+  // ── APIキー保存 & 準備完了 ────────────────────────────────────────
+  function saveApiKey() {
+    const key = apiKeyInput.value.trim();
+    if (!key.startsWith('sk-') || key.length < 20) {
+      apiKeyStatus.textContent = '❌ 無効なキー形式です（sk- で始まる文字列を入力）';
+      apiKeyStatus.style.color = '#ef4444';
+      return;
+    }
+    openaiApiKey = key;
+    setStatus('✅ 準備完了 — 「聞き取り開始」を押してください');
+    btnStart.disabled = false;
+    apiKeyStatus.textContent = '✅ 設定済み';
+    apiKeyStatus.style.color = '#22c55e';
+    pipeLog('OpenAI Whisper API キー設定完了');
   }
 
   // ── Start listening ─────────────────────────────────────────────
@@ -880,7 +887,7 @@ self.onmessage = async ({ data: msg }) => {
     btnStop.style.display      = 'block';
     pipelineWrap.style.display = 'block';
     pipeReset();
-    pipeLog(`聞き取り開始 — ${(chunkSamples/16000).toFixed(0)}秒ごとにWhisper処理（PCM直接取得）`);
+    pipeLog(`聞き取り開始 — 最大${parseInt(chunkSelect.value)/1000}秒チャンク / OpenAI Whisper API（VAD付き）`);
     setStatus('🟢 聞き取り中…', 'listening');
   }
 
@@ -890,12 +897,8 @@ self.onmessage = async ({ data: msg }) => {
     if (recordingCtx)       { recordingCtx.close(); recordingCtx = null; }
     if (mediaStream)        { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
     pcmBuffer         = [];
-    pendingResolve    = null;
-    pendingReject     = null;
     translationPaused = false;
     sentenceBuffer    = '';
-    // Worker は loadModel で再利用するため terminate しない
-    if (whisperWorker) whisperWorker.onmessage = onWorkerMessage;
     stopMeter();
     pipeReset();
     pipelineWrap.style.display = 'none';
@@ -984,10 +987,6 @@ self.onmessage = async ({ data: msg }) => {
     psQueue.textContent = chunkQueue.length;
 
     try {
-      // デコード不要 — PCMをそのまま使う
-      pipeSet('decode', 'done',
-        `PCM直接取得 (${(pcm.length / 16000).toFixed(1)}秒 / ${pcm.length.toLocaleString()}サンプル)`);
-
       // 無音チェック（閾値を下げて見逃しを減らす）
       const rms    = Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length);
       const dbVal  = rms > 0 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
@@ -996,9 +995,13 @@ self.onmessage = async ({ data: msg }) => {
         return processNextChunk();
       }
 
-      // Whisper認識（Worker 内で実行 → メインスレッドはフリーズしない）
-      pipeSet('whisper', 'active', `Whisper認識中… (音量: ${dbVal} dB)`);
-      const text = (await transcribeInWorker(pcm)).trim();
+      // WAV変換してOpenAI Whisper APIへ送信
+      pipeSet('decode', 'active', `WAV変換中… (${(pcm.length / 16000).toFixed(1)}秒)`);
+      const wavBlob = pcmToWav(pcm);
+      pipeSet('decode', 'done', `WAV変換完了 (${(wavBlob.size / 1024).toFixed(0)} KB)`);
+
+      pipeSet('whisper', 'active', `OpenAI Whisper API 送信中… (音量: ${dbVal} dB)`);
+      const text = (await transcribeWithOpenAI(pcm)).trim();
 
       if (!text || text.length < 3 || /^\[.*\]$/.test(text)) {
         pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
@@ -1155,9 +1158,23 @@ self.onmessage = async ({ data: msg }) => {
 
   atToggle.addEventListener('change', () => { autoTranslate = atToggle.checked; });
 
-  modelSelect.addEventListener('change', () => {
-    loadModel();
+  // APIキー入力欄の変化でボタン有効/無効を切り替え
+  apiKeyInput.addEventListener('input', () => {
+    const key = apiKeyInput.value.trim();
+    btnSaveKey.disabled = key.length < 10;
+    // キーが変わったら保存済み状態をリセット
+    if (key !== openaiApiKey) {
+      apiKeyStatus.textContent = '';
+      btnStart.disabled = true;
+      setStatus('OpenAI APIキーを入力して「準備完了」を押してください');
+    }
   });
+
+  apiKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveApiKey();
+  });
+
+  btnSaveKey.addEventListener('click', saveApiKey);
 
   // ── 遅延タイマー（1秒ごとに「最後の翻訳から○秒」を更新）───────────
   setInterval(() => {
@@ -1166,8 +1183,9 @@ self.onmessage = async ({ data: msg }) => {
     delayLabel.textContent = sec < 5 ? '' : `最後の翻訳: ${sec}秒前`;
   }, 1000);
 
-  // ── Init ────────────────────────────────────────────────────────
-  loadModel();
+  // ── Init（APIキー未設定 → 開始ボタンは無効のまま）──────────────────
+  // ページ再読込のたびにAPIキーの入力が必要（セキュリティのためlocalStorageには保存しない）
+  btnStart.disabled = true;
 </script>
 </body>
 </html>
