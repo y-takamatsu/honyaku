@@ -547,15 +547,15 @@
       ※ 無音を検出したタイミングで自動的にチャンクが確定されます（VAD）
     </div>
     <div style="font-size:0.78rem;color:#475569;margin-top:4px;">
-      🤖 音声認識エンジン: <strong style="color:#38bdf8;">OpenAI Whisper API</strong>（whisper-1 / $0.006/分）<br>
-      🌐 翻訳エンジン: <strong style="color:#38bdf8;">Google翻訳</strong> → MyMemory → Lingva（自動フォールバック）<br>
+      🤖 音声認識: <strong style="color:#38bdf8;">OpenAI Whisper API</strong>（whisper-1 / $0.006/分）<br>
+      🌐 翻訳: <strong style="color:#38bdf8;">GPT-4o-mini</strong>（文脈・敬語対応 / 約$0.0001/回）→ Google翻訳（自動フォールバック）<br>
       🔑 APIキーはこのページ内にのみ保存されます（外部サーバーには送信しません）
     </div>
   </div>
 
 </div>
 
-<footer>Listening Helper — Phase 2 | OpenAI Whisper API + Lingva Translate | Chrome 専用</footer>
+<footer>Listening Helper — Phase 2 | OpenAI Whisper API + GPT-4o-mini翻訳 | Chrome 専用</footer>
 
 <script>
   // ─────────────────────────────────────────────────────────────
@@ -1121,67 +1121,68 @@
   let translationPaused = false;  // 403 発生時に翻訳を一時停止
   let sentenceBuffer    = '';     // 翻訳待ち英文バッファ（文完成まで貯める）
 
-  // ── 翻訳エンジン（優先順位：Google非公式 → MyMemory → Lingva）─────
-  // 1. Google Translate 非公式 API（登録不要・高信頼性）
+  // ── 翻訳エンジン：GPT-4o-mini（メイン）+ Google非公式API（フォールバック）──
+
+  // メイン：GPT-4o-mini（同じAPIキーを使用）
+  async function translateViaGPT(en) {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a professional interpreter for business meetings and online conferences. Translate the English speech into natural, fluent Japanese. Preserve the tone and nuance. Output only the Japanese translation with no explanation.'
+          },
+          {
+            role: 'user',
+            content: en
+          }
+        ],
+        max_tokens: 512,
+        temperature: 0.3
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      let msg = `GPT API ${res.status}`;
+      try { const j = JSON.parse(errText); if (j.error?.message) msg += `: ${j.error.message}`; } catch {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    const result = data.choices?.[0]?.message?.content?.trim();
+    if (!result) throw new Error('GPT: empty response');
+    return result;
+  }
+
+  // フォールバック：Google Translate 非公式 API
   async function translateViaGoogle(en) {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ja&dt=t&q=${encodeURIComponent(en)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`Google ${res.status}`);
     const data = await res.json();
-    // data[0] = [[translated, original, ...], ...]
     const translated = data[0].map(item => item[0]).filter(Boolean).join('');
     if (!translated) throw new Error('Google: empty response');
     return translated;
   }
 
-  // 2. MyMemory（1日5000字まで無料）
-  async function translateViaMyMemory(en) {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(en)}&langpair=en|ja`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) throw new Error(`MyMemory ${res.status}`);
-    const data = await res.json();
-    if (data.responseStatus !== 200) throw new Error(`MyMemory status ${data.responseStatus}`);
-    return data.responseData.translatedText;
-  }
-
-  // 3. Lingva（フォールバック群）
-  const LINGVA_HOSTS = [
-    'https://lingva.ml',
-    'https://lingva.pussthecat.org',
-    'https://translate.plausibility.cloud',
-  ];
-  async function translateViaLingva(en) {
-    for (const host of LINGVA_HOSTS) {
-      try {
-        const url = `${host}/api/v1/en/ja/${encodeURIComponent(en)}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-        if (!res.ok) continue;
-        const data = await res.json();
-        if (data.translation) return data.translation;
-      } catch (e) { /* 次へ */ }
-    }
-    throw new Error('All Lingva instances failed');
-  }
-
-  // メイン翻訳関数（カスケードフォールバック）
+  // メイン翻訳関数
   async function translateText(en) {
-    // Google 非公式 API を優先
+    // GPT-4o-mini を優先
+    try { return await translateViaGPT(en); } catch (e) {
+      pipeLog(`⚠ GPT翻訳 失敗 (${e.message}) → Google翻訳へフォールバック`);
+    }
+    // Google 非公式 API にフォールバック
     try { return await translateViaGoogle(en); } catch (e) {
-      pipeLog(`⚠ Google翻訳 失敗 (${e.message}) → MyMemory へ`);
+      pipeLog(`⚠ Google翻訳 失敗 (${e.message})`);
     }
-    // MyMemory にフォールバック
-    try { return await translateViaMyMemory(en); } catch (e) {
-      pipeLog(`⚠ MyMemory 失敗 (${e.message}) → Lingva へ`);
-    }
-    // Lingva にフォールバック
-    try { return await translateViaLingva(en); } catch (e) {
-      pipeLog(`⚠ Lingva 全滅 (${e.message})`);
-    }
-    return '[翻訳失敗: すべての翻訳サービスが応答しませんでした]';
-  }
-
-  function show403Warning(show) {
-    document.getElementById('warn-403').style.display = show ? 'block' : 'none';
+    return '[翻訳失敗]';
   }
 
   // ── History ─────────────────────────────────────────────────────
