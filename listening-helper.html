@@ -425,6 +425,13 @@
   ⚠️ 音声トラックが検出されませんでした。もう一度「聞き取り開始」を押して、ダイアログで「<strong>音声を共有</strong>」にチェックを入れてください。
 </div>
 
+<!-- 翻訳403警告（常時表示エリア） -->
+<div id="warn-403" style="display:none; background:#7c2d12; border-radius:8px; padding:12px 16px; margin-bottom:14px; font-size:0.88rem; color:#fed7aa; border:1px solid #ef4444;">
+  ⚠️ <strong>翻訳上限（403）に達しました。</strong><br>
+  下の「設定」→「メール登録」にアドレスを入力すると上限が<strong>10倍（5,000→50,000文字/日）</strong>になります。<br>
+  入力後「⏹ 停止」→「🎧 聞き取り開始」で再開してください。
+</div>
+
 <!-- Pipeline status -->
 <div id="pipeline-wrap" style="display:none; background:#1e293b; border-radius:10px; padding:14px 16px; border:1px solid #334155; margin-bottom:16px;">
   <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:10px;">処理パイプライン</div>
@@ -985,6 +992,14 @@ self.onmessage = async ({ data: msg }) => {
         pipeSet('whisper', 'skip', `認識結果なし: "${text}"`);
         return processNextChunk();
       }
+
+      // ── ハルシネーション検出（同じフレーズの繰り返し）────────────
+      if (isHallucination(text)) {
+        pipeSet('whisper', 'skip', `ハルシネーション検出（繰り返しパターン）— 破棄`);
+        pipeLog(`🚫 ハルシネーション: "${text.slice(0, 60)}…"`);
+        return processNextChunk();
+      }
+
       const elapsed = ((Date.now() - chunkStart) / 1000).toFixed(1);
       pipeSet('whisper', 'done',
         `認識完了 (${elapsed}秒): "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`);
@@ -1015,6 +1030,24 @@ self.onmessage = async ({ data: msg }) => {
   }
 
   // ── MyMemory translation ────────────────────────────────────────
+  // ── ハルシネーション検出 ─────────────────────────────────────────
+  // Whisperは音声不明瞭なとき同じフレーズをループする（幻覚出力）
+  // ウィンドウサイズ2〜6単語で同じフレーズが4回以上 → ハルシネーションと判定
+  function isHallucination(text) {
+    const words = text.trim().split(/\s+/);
+    if (words.length < 10) return false;   // 短すぎる文は判定しない
+    for (let w = 2; w <= 6; w++) {
+      const seen = new Map();
+      for (let i = 0; i <= words.length - w; i++) {
+        const key = words.slice(i, i + w).join(' ').toLowerCase();
+        const cnt = (seen.get(key) || 0) + 1;
+        seen.set(key, cnt);
+        if (cnt >= 4) return true;         // 同じフレーズが4回以上 → 幻覚
+      }
+    }
+    return false;
+  }
+
   let translationPaused = false;  // 403 発生時に翻訳を一時停止
 
   async function translateText(en) {
@@ -1048,19 +1081,7 @@ self.onmessage = async ({ data: msg }) => {
   }
 
   function show403Warning(show) {
-    let el = document.getElementById('warn-403');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'warn-403';
-      el.style.cssText = 'background:#7c2d12;border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:0.88rem;color:#fed7aa;border:1px solid #ef4444;';
-      el.innerHTML = `⚠️ <strong>翻訳上限（403）に達しました。</strong><br>
-        設定欄の「メール登録」にメールアドレスを入力すると1日の上限が<strong>10倍</strong>になります。<br>
-        入力後は「停止 → 聞き取り開始」で再開してください。`;
-      // パイプラインの直前に挿入
-      const pipe = document.getElementById('pipeline-wrap');
-      pipe.parentNode.insertBefore(el, pipe);
-    }
-    el.style.display = show ? 'block' : 'none';
+    document.getElementById('warn-403').style.display = show ? 'block' : 'none';
   }
 
   // ── History ─────────────────────────────────────────────────────
