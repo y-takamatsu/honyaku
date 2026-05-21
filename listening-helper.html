@@ -407,6 +407,11 @@
           <span class="toggle-slider"></span>
         </label>
         <span style="font-size:0.8rem;color:#64748b;">🔊 読み上げ</span>
+        <select id="tts-rate-select" style="margin-left:8px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:3px 6px;border-radius:6px;font-size:0.8rem;">
+          <option value="1.5">1.5倍</option>
+          <option value="2.0" selected>2倍</option>
+          <option value="2.5">2.5倍</option>
+        </select>
       </div>
     </div>
     <div id="subtitle-text">日本語の字幕がここに表示されます</div>
@@ -471,6 +476,7 @@
   let isProcessingChunk  = false;
   let autoTranslate      = true;
   let ttsEnabled         = false;  // 読み上げON/OFF
+  let ttsPending         = null;   // 読み上げ待ちテキスト（最新1件のみ保持）
   let historyItems       = [];
   let meterAnimId        = null;
   let analyserNode       = null;
@@ -501,6 +507,7 @@
   const sliderLabel   = document.getElementById('font-size-label');
   const atToggle      = document.getElementById('auto-translate-toggle');
   const ttsToggle     = document.getElementById('tts-toggle');
+  const ttsRateSelect = document.getElementById('tts-rate-select');
   const noAudioWarn   = document.getElementById('no-audio-warning');
   const meterWrap     = document.getElementById('audio-meter-wrap');
   const meterBarInner = document.getElementById('meter-bar-inner');
@@ -537,15 +544,21 @@
   function pipeLog(msg) { console.debug('[pipe]', msg); }
 
   // ── 日本語読み上げ（Web Speech API）────────────────────────────────
+  // 現在読み上げ中なら最後まで読んでから次を話す（最新1件のみキュー保持）
   function speak(text) {
     if (!ttsEnabled) return;
-    // 前の読み上げを即座にキャンセル
-    window.speechSynthesis.cancel();
+    if (window.speechSynthesis.speaking) {
+      ttsPending = text;   // 現在の読み上げが終わったら話す（上書きで最新のみ保持）
+      return;
+    }
+    startSpeak(text);
+  }
 
+  function startSpeak(text) {
     const utter = new SpeechSynthesisUtterance(text);
-    utter.lang  = 'ja-JP';
-    utter.rate  = 1.5;   // 1.5倍速
-    utter.pitch = 1.0;
+    utter.lang   = 'ja-JP';
+    utter.rate   = parseFloat(ttsRateSelect.value);
+    utter.pitch  = 1.0;
     utter.volume = 1.0;
 
     // 日本語音声を優先して選択
@@ -554,6 +567,15 @@
                  || voices.find(v => v.lang === 'ja-JP')
                  || voices.find(v => v.lang.startsWith('ja'));
     if (jaVoice) utter.voice = jaVoice;
+
+    // 読み上げ完了後にキューがあれば次を話す
+    utter.onend = () => {
+      if (ttsPending) {
+        const next = ttsPending;
+        ttsPending = null;
+        startSpeak(next);
+      }
+    };
 
     window.speechSynthesis.speak(utter);
   }
@@ -765,6 +787,7 @@
     pcmBuffer         = [];
     translationPaused = false;
     sentenceBuffer    = '';
+    ttsPending = null;
     window.speechSynthesis.cancel();  // 読み上げ中なら止める
     stopMeter();
     isListening = false;
@@ -1086,7 +1109,7 @@
 
   ttsToggle.addEventListener('change', () => {
     ttsEnabled = ttsToggle.checked;
-    if (!ttsEnabled) window.speechSynthesis.cancel();
+    if (!ttsEnabled) { ttsPending = null; window.speechSynthesis.cancel(); }
     // 初回ONのときgetVoices()がロードされていない場合があるので事前ロード
     if (ttsEnabled) window.speechSynthesis.getVoices();
   });
