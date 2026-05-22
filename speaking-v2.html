@@ -197,6 +197,8 @@
         <option value="es">🇪🇸 Spanish</option>
         <option value="fr">🇫🇷 French</option>
         <option value="de">🇩🇪 German</option>
+        <option value="pt">🇧🇷 Portuguese</option>
+        <option value="th">🇹🇭 Thai</option>
       </select>
     </div>
   </div>
@@ -275,7 +277,6 @@ function setInputMode(mode, silent){
   document.getElementById('srcSystem').classList.toggle('active', mode==='system');
   document.getElementById('systemHint').classList.toggle('visible', mode==='system');
   document.getElementById('meterLbl').textContent = mode==='system' ? 'In' : 'Mic';
-  // Cannot change mode while active
   if(isActive) doStop();
 }
 
@@ -387,7 +388,6 @@ async function startMic(){
   URL.revokeObjectURL(url);
 
   if(inputMode==='system'){
-    // System audio via getDisplayMedia
     setStatus('Select screen to share…','yellow');
     try{
       micStream=await navigator.mediaDevices.getDisplayMedia({
@@ -395,7 +395,6 @@ async function startMic(){
         video:false
       });
     }catch(e){
-      // Fallback: some browsers need video:true
       micStream=await navigator.mediaDevices.getDisplayMedia({
         audio:{ echoCancellation:false, noiseSuppression:false },
         video:{ width:1, height:1, frameRate:1 }
@@ -405,9 +404,7 @@ async function startMic(){
       micStream.getTracks().forEach(t=>t.stop());
       throw new Error('No audio track — please check "Share system audio"');
     }
-    // Stop video track immediately (we only need audio)
     micStream.getVideoTracks().forEach(t=>t.stop());
-    // Handle user stopping share from browser UI
     micStream.getAudioTracks()[0].addEventListener('ended',()=>{ if(isActive) doStop(); });
     setStatus('Connected','green');
   }else{
