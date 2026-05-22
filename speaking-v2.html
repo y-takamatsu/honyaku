@@ -252,7 +252,8 @@ function sendSessionUpdate() {
           noise_reduction:{ type:'near_field' }
         },
         output:{
-          language: document.getElementById('outputLang').value
+          language: document.getElementById('outputLang').value,
+          transcription:{ model:'gpt-realtime-whisper' }  // ← テキスト出力を有効化
         }
       }
     }
@@ -260,21 +261,26 @@ function sendSessionUpdate() {
 }
 
 function onServerEvent(m) {
+  // すべてのサーバーイベントをコンソールに記録（デバッグ用）
+  if(m.type !== 'session.output_audio.delta') {
+    console.log('← server:', m.type, m);
+  }
+
   switch(m.type) {
     // ── セッション管理 ──────────────────────────────
     case 'session.created':
       sendSessionUpdate();
       break;
 
-    // ── テキスト出力（Translation API の正しいイベント名）──
+    // ── テキスト出力 ──────────────────────────────────
     case 'session.output_text.delta':
-      appendText(m.delta ?? '');
+      appendText(m.delta ?? m.text ?? '');
       break;
     case 'session.output_text.done':
-      curLine = null;   // 次のフレーズは新しい行へ
+      curLine = null;
       break;
 
-    // ── 音声出力（Translation API の正しいイベント名）──
+    // ── 音声出力 ──────────────────────────────────────
     case 'session.output_audio.delta':
       if(m.delta) enqueueAudio(m.delta);
       break;
@@ -353,6 +359,7 @@ function schedulePlay() {
 //  Transcript
 // ═══════════════════════════════════════════════════════
 function appendText(t) {
+  if(!t) return;
   const area=document.getElementById('transcript');
   const hint=document.getElementById('hint'); if(hint) hint.remove();
   if(!curLine){
