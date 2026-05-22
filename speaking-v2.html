@@ -64,17 +64,19 @@
   .lang-row { display: flex; align-items: flex-end; gap: 10px; }
   .field { flex: 1; display: flex; flex-direction: column; gap: 5px; }
   .field label { font-size: 12px; color: var(--muted); }
+  .auto-badge {
+    font-size: 11px; color: var(--green); background: #10a37f22;
+    border: 1px solid #10a37f44; border-radius: 4px;
+    padding: 2px 6px; display: inline-block; margin-top: 2px;
+  }
   select {
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
     padding: 9px 12px; color: var(--text); font-size: 14px; cursor: pointer; width: 100%;
   }
   select:focus { outline: none; border-color: var(--green); }
-  .swap-btn {
-    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
-    color: var(--muted); font-size: 20px; padding: 8px 12px;
-    cursor: pointer; transition: color .15s, border-color .15s; line-height: 1;
+  .arrow-lbl {
+    font-size: 22px; color: var(--muted); padding-bottom: 6px; line-height: 1;
   }
-  .swap-btn:hover { color: var(--text); border-color: #555; }
 
   /* ── Transcript ── */
   .transcript {
@@ -134,20 +136,23 @@
   </div>
 
   <!-- Language Pair -->
+  <!-- Input language is auto-detected by the API. Only output language is configurable. -->
   <div class="lang-row">
     <div class="field">
       <label>You speak</label>
-      <select id="inputLang">
-        <option value="ja">Japanese 🇯🇵</option>
-        <option value="en">English 🇺🇸</option>
-      </select>
+      <span class="auto-badge">✦ Auto-detected</span>
     </div>
-    <button class="swap-btn" onclick="swapLangs()" title="Swap languages">⇄</button>
+    <div class="arrow-lbl">→</div>
     <div class="field">
       <label>Translate to</label>
-      <select id="outputLang">
+      <select id="outputLang" onchange="onLangChange()">
         <option value="en">English 🇺🇸</option>
         <option value="ja">Japanese 🇯🇵</option>
+        <option value="zh">Chinese 🇨🇳</option>
+        <option value="ko">Korean 🇰🇷</option>
+        <option value="es">Spanish 🇪🇸</option>
+        <option value="fr">French 🇫🇷</option>
+        <option value="de">German 🇩🇪</option>
       </select>
     </div>
   </div>
@@ -155,7 +160,7 @@
   <!-- Transcript -->
   <div class="transcript" id="transcript">
     <p class="hint-text" id="hint">
-      Press <strong>Start</strong> and speak —
+      Press <strong>Start</strong> and speak in any language —
       translation will appear here in real time.
     </p>
   </div>
@@ -168,7 +173,6 @@
 
   <!-- Controls -->
   <div class="btn-row">
-    <button class="btn-secondary" onclick="swapLangs()">⇄ Swap</button>
     <button class="btn-primary" id="startBtn" onclick="toggleSession()">▶ Start</button>
     <button class="btn-secondary" onclick="clearTranscript()">🗑 Clear</button>
   </div>
@@ -227,6 +231,8 @@ let curLine    = null;
 {
   const saved = localStorage.getItem('oai_key');
   if (saved) document.getElementById('apiKeyInput').value = saved;
+  const savedLang = localStorage.getItem('oai_outlang');
+  if (savedLang) document.getElementById('outputLang').value = savedLang;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -247,22 +253,21 @@ function getKey() {
 }
 
 // ═══════════════════════════════════════════════════════
+//  Language change handler
+// ═══════════════════════════════════════════════════════
+function onLangChange() {
+  const lang = document.getElementById('outputLang').value;
+  localStorage.setItem('oai_outlang', lang);
+  if (ws?.readyState === WebSocket.OPEN) sendSessionUpdate();
+}
+
+// ═══════════════════════════════════════════════════════
 //  Status indicator
 // ═══════════════════════════════════════════════════════
 function setStatus(text, cls) {
   document.getElementById('statusText').textContent = text;
   const d = document.getElementById('dot');
   d.className = 'dot' + (cls ? ' ' + cls : '');
-}
-
-// ═══════════════════════════════════════════════════════
-//  Language swap
-// ═══════════════════════════════════════════════════════
-function swapLangs() {
-  const a = document.getElementById('inputLang');
-  const b = document.getElementById('outputLang');
-  [a.value, b.value] = [b.value, a.value];
-  if (ws?.readyState === WebSocket.OPEN) sendSessionUpdate();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -274,8 +279,6 @@ function openWS() {
 
   setStatus('Connecting…', 'yellow');
 
-  // Browser WebSocket cannot set Authorization header directly.
-  // OpenAI GA API accepts the key via Sec-WebSocket-Protocol subprotocol.
   ws = new WebSocket(
     'wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate',
     ['realtime', `openai-insecure-api-key.${key}`]
@@ -291,12 +294,15 @@ function openWS() {
 
 function sendSessionUpdate() {
   if (ws?.readyState !== WebSocket.OPEN) return;
+  // Translation API:
+  //   - Input language is AUTO-DETECTED (no parameter needed)
+  //   - Only output language + optional transcription model are configurable
   ws.send(JSON.stringify({
     type: 'session.update',
     session: {
       audio: {
         input: {
-          language: document.getElementById('inputLang').value,
+          transcription: { model: 'gpt-realtime-whisper' },
           noise_reduction: { type: 'near_field' }
         },
         output: {
@@ -310,13 +316,13 @@ function sendSessionUpdate() {
 function onServerEvent(m) {
   switch (m.type) {
     case 'session.created':
-      sendSessionUpdate();           // configure language pair
+      sendSessionUpdate();
       break;
     case 'response.text.delta':
       appendText(m.delta ?? '');
       break;
     case 'response.text.done':
-      curLine = null;                // next phrase → new line
+      curLine = null;
       break;
     case 'response.audio.delta':
       if (m.delta) enqueueAudio(m.delta);
@@ -335,7 +341,6 @@ async function startMic() {
   audioCtx = new AudioContext({ sampleRate: 24000 });
   playCtx  = new AudioContext({ sampleRate: 24000 });
 
-  // Load worklet from an inline blob URL
   const blob    = new Blob([WORKLET], { type: 'application/javascript' });
   const blobURL = URL.createObjectURL(blob);
   await audioCtx.audioWorklet.addModule(blobURL);
@@ -351,7 +356,6 @@ async function startMic() {
   workletNode.port.onmessage = ({ data: { buf, rms } }) => {
     setMeter(rms);
     if (ws?.readyState === WebSocket.OPEN) {
-      // Translation API uses 'session.' prefix for all client events
       ws.send(JSON.stringify({
         type:  'session.input_audio_buffer.append',
         audio: bufToB64(buf)
@@ -370,17 +374,15 @@ function stopMic() {
 }
 
 // ═══════════════════════════════════════════════════════
-//  Audio playback (translated speech from API)
+//  Audio playback
 // ═══════════════════════════════════════════════════════
 function enqueueAudio(b64) {
-  // Decode base64 → little-endian PCM16 → Float32
   const raw = atob(b64);
   const pcm = new Int16Array(raw.length / 2);
   for (let i = 0; i < pcm.length; i++)
     pcm[i] = raw.charCodeAt(i * 2) | (raw.charCodeAt(i * 2 + 1) << 8);
   const f32 = new Float32Array(pcm.length);
   for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768.0;
-
   playQueue.push(f32);
   if (!isPlaying) schedulePlay();
 }
@@ -405,7 +407,6 @@ function appendText(t) {
   const area = document.getElementById('transcript');
   const hint = document.getElementById('hint');
   if (hint) hint.remove();
-
   if (!curLine) {
     curLine = document.createElement('p');
     curLine.className = 'line';
@@ -417,7 +418,7 @@ function appendText(t) {
 
 function clearTranscript() {
   document.getElementById('transcript').innerHTML =
-    '<p class="hint-text" id="hint">Press <strong>Start</strong> and speak — translation will appear here in real time.</p>';
+    '<p class="hint-text" id="hint">Press <strong>Start</strong> and speak in any language — translation will appear here in real time.</p>';
   curLine = null;
 }
 
@@ -456,14 +457,11 @@ function doStop() {
   isActive  = false;
   playQueue = [];
   isPlaying = false;
-
   stopMic();
   if (ws && ws.readyState < WebSocket.CLOSING) ws.close();
   ws = null;
-
   playCtx?.close(); playCtx = null;
   setStatus('Not connected', '');
-
   const btn = document.getElementById('startBtn');
   btn.textContent = '▶ Start';
   btn.classList.remove('danger');
