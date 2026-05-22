@@ -267,7 +267,6 @@ function swapLangs() {
 
 // ═══════════════════════════════════════════════════════
 //  WebSocket — OpenAI Realtime Translation API (GA)
-//  Fix: removed deprecated 'openai-beta.realtime-v1' subprotocol
 // ═══════════════════════════════════════════════════════
 function openWS() {
   const key = getKey();
@@ -277,7 +276,6 @@ function openWS() {
 
   // Browser WebSocket cannot set Authorization header directly.
   // OpenAI GA API accepts the key via Sec-WebSocket-Protocol subprotocol.
-  // NOTE: 'openai-beta.realtime-v1' has been removed — it caused the Beta API error.
   ws = new WebSocket(
     'wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate',
     ['realtime', `openai-insecure-api-key.${key}`]
@@ -334,7 +332,6 @@ function onServerEvent(m) {
 //  Microphone capture (AudioWorklet)
 // ═══════════════════════════════════════════════════════
 async function startMic() {
-  // Both contexts use 24 kHz — matches the Realtime API format
   audioCtx = new AudioContext({ sampleRate: 24000 });
   playCtx  = new AudioContext({ sampleRate: 24000 });
 
@@ -348,14 +345,15 @@ async function startMic() {
     audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 24000 }
   });
 
-  const src  = audioCtx.createMediaStreamSource(micStream);
+  const src   = audioCtx.createMediaStreamSource(micStream);
   workletNode = new AudioWorkletNode(audioCtx, 'pcm-proc');
 
   workletNode.port.onmessage = ({ data: { buf, rms } }) => {
     setMeter(rms);
     if (ws?.readyState === WebSocket.OPEN) {
+      // Translation API uses 'session.' prefix for all client events
       ws.send(JSON.stringify({
-        type:  'input_audio_buffer.append',
+        type:  'session.input_audio_buffer.append',
         audio: bufToB64(buf)
       }));
     }
