@@ -266,7 +266,8 @@ function swapLangs() {
 }
 
 // ═══════════════════════════════════════════════════════
-//  WebSocket — OpenAI Realtime Translation API
+//  WebSocket — OpenAI Realtime Translation API (GA)
+//  Fix: removed deprecated 'openai-beta.realtime-v1' subprotocol
 // ═══════════════════════════════════════════════════════
 function openWS() {
   const key = getKey();
@@ -275,10 +276,11 @@ function openWS() {
   setStatus('Connecting…', 'yellow');
 
   // Browser WebSocket cannot set Authorization header directly.
-  // OpenAI accepts the key via Sec-WebSocket-Protocol subprotocol field.
+  // OpenAI GA API accepts the key via Sec-WebSocket-Protocol subprotocol.
+  // NOTE: 'openai-beta.realtime-v1' has been removed — it caused the Beta API error.
   ws = new WebSocket(
     'wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate',
-    ['realtime', `openai-insecure-api-key.${key}`, 'openai-beta.realtime-v1']
+    ['realtime', `openai-insecure-api-key.${key}`]
   );
 
   ws.onopen   = ()  => setStatus('Connected', 'green');
