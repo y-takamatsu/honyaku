@@ -48,6 +48,24 @@
   }
   input[type=password]:focus { outline: none; border-color: var(--green); }
 
+  /* ── Input Source Selector ── */
+  .source-row { display: flex; background: var(--border); border-radius: 8px; padding: 3px; gap: 3px; }
+  .src-btn {
+    flex: 1; padding: 8px 6px; border-radius: 6px; border: none;
+    background: transparent; color: var(--muted); font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: background .15s, color .15s; font-family: inherit;
+    white-space: nowrap;
+  }
+  .src-btn.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  .src-btn:hover:not(.active) { color: #bbb; }
+  .system-hint {
+    background: #1a1f1a; border: 1px solid #2a3d2a; border-radius: 8px;
+    padding: 10px 14px; font-size: 12px; color: #7aaa7a; line-height: 1.6;
+    display: none;
+  }
+  .system-hint.visible { display: block; }
+  .system-hint strong { color: #9acc9a; }
+
   /* ── Language row ── */
   .lang-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
   .field { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 5px; }
@@ -72,17 +90,15 @@
   }
   .hint-text { color: var(--muted); font-size: 15px; line-height: 1.7; }
   .hint-text strong { color: #bbb; }
-
   .entry { margin-bottom: 18px; }
   .entry:last-child { margin-bottom: 0; }
   .entry .orig  { font-size: 12px; color: var(--muted); margin-bottom: 3px; line-height: 1.5; }
   .entry .trans { font-size: 22px; line-height: 1.5; word-break: break-word; color: var(--text); }
-
   .transcript::-webkit-scrollbar { width: 5px; }
   .transcript::-webkit-scrollbar-track { background: transparent; }
   .transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-  /* copy button (bottom-right of transcript) */
+  /* copy button */
   .copy-btn {
     position: absolute; bottom: 10px; right: 10px;
     background: var(--border); color: var(--muted); border: none;
@@ -151,6 +167,19 @@
     </div>
   </div>
 
+  <!-- Input Source -->
+  <div class="source-row">
+    <button class="src-btn active" id="srcMic" onclick="setInputMode('mic')">🎤 Microphone</button>
+    <button class="src-btn" id="srcSystem" onclick="setInputMode('system')">🖥 System Audio (Zoom / Meeting)</button>
+  </div>
+  <div class="system-hint" id="systemHint">
+    <strong>How to use System Audio:</strong><br>
+    1. Click <strong>▶ Start</strong> — Chrome will open a sharing dialog<br>
+    2. Select <strong>"Entire Screen"</strong> or <strong>"Window"</strong><br>
+    3. Check <strong>"Share system audio"</strong> ✓ at the bottom<br>
+    4. Click <strong>Share</strong> — Zoom audio will be translated in real time
+  </div>
+
   <!-- Language Pair -->
   <div class="lang-row">
     <div class="field">
@@ -185,7 +214,7 @@
 
   <!-- Mic Level -->
   <div class="meter-row">
-    <span class="meter-lbl">Mic</span>
+    <span class="meter-lbl" id="meterLbl">Mic</span>
     <div class="meter-bg"><div class="meter-fill" id="meter"></div></div>
   </div>
 
@@ -230,9 +259,25 @@ registerProcessor('pcm-proc',PCMProc);
 let ws=null, audioCtx=null, playCtx=null, micStream=null, workletNode=null;
 let isActive=false, playQueue=[], isPlaying=false;
 let curEntry=null;
+let inputMode='mic';
 
 { const s=localStorage.getItem('oai_key'); if(s) document.getElementById('apiKeyInput').value=s; }
 { const l=localStorage.getItem('oai_outlang'); if(l) document.getElementById('outputLang').value=l; }
+{ const m=localStorage.getItem('oai_inputmode'); if(m) setInputMode(m,true); }
+
+// ═══════════════════════════════════════════════
+//  Input mode selector
+// ═══════════════════════════════════════════════
+function setInputMode(mode, silent){
+  inputMode=mode;
+  if(!silent) localStorage.setItem('oai_inputmode', mode);
+  document.getElementById('srcMic').classList.toggle('active', mode==='mic');
+  document.getElementById('srcSystem').classList.toggle('active', mode==='system');
+  document.getElementById('systemHint').classList.toggle('visible', mode==='system');
+  document.getElementById('meterLbl').textContent = mode==='system' ? 'In' : 'Mic';
+  // Cannot change mode while active
+  if(isActive) doStop();
+}
 
 // ═══════════════════════════════════════════════
 //  UI helpers
@@ -254,7 +299,7 @@ function onLangChange(){
 }
 
 // ═══════════════════════════════════════════════
-//  Copy all translations
+//  Copy all
 // ═══════════════════════════════════════════════
 function copyAll(){
   const entries=[...document.querySelectorAll('.entry')];
@@ -272,12 +317,11 @@ function copyAll(){
 }
 
 // ═══════════════════════════════════════════════
-//  Keyboard shortcut  (Space = toggle)
+//  Keyboard shortcut (Space = toggle)
 // ═══════════════════════════════════════════════
 document.addEventListener('keydown', e=>{
   if(e.code==='Space' && e.target.tagName!=='INPUT' && e.target.tagName!=='TEXTAREA'){
-    e.preventDefault();
-    toggleSession();
+    e.preventDefault(); toggleSession();
   }
 });
 
@@ -307,7 +351,7 @@ function sendSessionUpdate(){
       audio:{
         input:{
           transcription:{ model:'gpt-realtime-whisper' },
-          noise_reduction:{ type:'near_field' }
+          noise_reduction:{ type: inputMode==='mic' ? 'near_field' : 'far_field' }
         },
         output:{ language: document.getElementById('outputLang').value }
       }
@@ -317,39 +361,22 @@ function sendSessionUpdate(){
 
 function onServerEvent(m){
   switch(m.type){
-    case 'session.created':
-      sendSessionUpdate();
-      break;
-
-    case 'session.output_transcript.delta':
-      appendTransDelta(m.delta ?? m.transcript ?? '');
-      break;
-    case 'session.output_transcript.done':
-      finishEntry();
-      break;
-
-    case 'session.input_transcript.delta':
-      appendOrigDelta(m.delta ?? m.transcript ?? '');
-      break;
-    case 'session.input_transcript.done':
-      break;
-
-    case 'session.output_audio.delta':
-      if(m.delta) enqueueAudio(m.delta);
-      break;
-
+    case 'session.created':      sendSessionUpdate(); break;
+    case 'session.output_transcript.delta': appendTransDelta(m.delta??m.transcript??''); break;
+    case 'session.output_transcript.done':  finishEntry(); break;
+    case 'session.input_transcript.delta':  appendOrigDelta(m.delta??m.transcript??''); break;
+    case 'session.input_transcript.done':   break;
+    case 'session.output_audio.delta':      if(m.delta) enqueueAudio(m.delta); break;
     case 'error':
       setStatus('API error: '+(m.error?.message??'?'),'red');
-      console.error('OpenAI error', m);
-      break;
-
+      console.error('OpenAI error',m); break;
     default:
-      console.log('← server:', m.type, m);
+      console.log('← server:',m.type,m);
   }
 }
 
 // ═══════════════════════════════════════════════
-//  Microphone
+//  Microphone / System audio capture
 // ═══════════════════════════════════════════════
 async function startMic(){
   audioCtx=new AudioContext({sampleRate:24000});
@@ -358,9 +385,37 @@ async function startMic(){
   const url=URL.createObjectURL(blob);
   await audioCtx.audioWorklet.addModule(url);
   URL.revokeObjectURL(url);
-  micStream=await navigator.mediaDevices.getUserMedia({
-    audio:{echoCancellation:true,noiseSuppression:true,sampleRate:24000}
-  });
+
+  if(inputMode==='system'){
+    // System audio via getDisplayMedia
+    setStatus('Select screen to share…','yellow');
+    try{
+      micStream=await navigator.mediaDevices.getDisplayMedia({
+        audio:{ echoCancellation:false, noiseSuppression:false, sampleRate:24000 },
+        video:false
+      });
+    }catch(e){
+      // Fallback: some browsers need video:true
+      micStream=await navigator.mediaDevices.getDisplayMedia({
+        audio:{ echoCancellation:false, noiseSuppression:false },
+        video:{ width:1, height:1, frameRate:1 }
+      });
+    }
+    if(!micStream.getAudioTracks().length){
+      micStream.getTracks().forEach(t=>t.stop());
+      throw new Error('No audio track — please check "Share system audio"');
+    }
+    // Stop video track immediately (we only need audio)
+    micStream.getVideoTracks().forEach(t=>t.stop());
+    // Handle user stopping share from browser UI
+    micStream.getAudioTracks()[0].addEventListener('ended',()=>{ if(isActive) doStop(); });
+    setStatus('Connected','green');
+  }else{
+    micStream=await navigator.mediaDevices.getUserMedia({
+      audio:{echoCancellation:true, noiseSuppression:true, sampleRate:24000}
+    });
+  }
+
   const src=audioCtx.createMediaStreamSource(micStream);
   workletNode=new AudioWorkletNode(audioCtx,'pcm-proc');
   workletNode.port.onmessage=({data:{buf,rms}})=>{
@@ -370,6 +425,7 @@ async function startMic(){
   };
   src.connect(workletNode);
 }
+
 function stopMic(){
   workletNode?.disconnect(); workletNode=null;
   micStream?.getTracks().forEach(t=>t.stop()); micStream=null;
@@ -414,18 +470,10 @@ function ensureEntry(){
   area.appendChild(div);
   curEntry={orig,trans};
 }
-function appendOrigDelta(t){
-  if(!t) return; ensureEntry();
-  curEntry.orig.textContent+=t;
-  document.getElementById('transcript').scrollTop=99999;
-}
-function appendTransDelta(t){
-  if(!t) return; ensureEntry();
-  curEntry.trans.textContent+=t;
-  document.getElementById('transcript').scrollTop=99999;
-}
+function appendOrigDelta(t){ if(!t) return; ensureEntry(); curEntry.orig.textContent+=t; scroll(); }
+function appendTransDelta(t){ if(!t) return; ensureEntry(); curEntry.trans.textContent+=t; scroll(); }
 function finishEntry(){ curEntry=null; }
-
+function scroll(){ document.getElementById('transcript').scrollTop=99999; }
 function clearTranscript(){
   document.getElementById('transcript').innerHTML=
     '<p class="hint-text" id="hint">Press <strong>Start</strong> and speak in any language — translation will appear here in real time.</p>';
@@ -453,8 +501,9 @@ async function doStart(){
     const btn=document.getElementById('startBtn');
     btn.textContent='■ Stop'; btn.classList.add('danger');
   }catch(e){
-    setStatus('Microphone access denied','red');
+    setStatus(e.message||'Microphone access denied','red');
     ws?.close(); ws=null;
+    console.error(e);
   }
 }
 function doStop(){
