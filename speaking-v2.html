@@ -65,6 +65,7 @@
   .hint-text { color: var(--muted); font-size: 15px; line-height: 1.7; }
   .hint-text strong { color: #bbb; }
   .line { font-size: 20px; line-height: 1.65; margin-bottom: 10px; word-break: break-word; }
+  .line.pending { color: var(--muted); font-style: italic; }
   .line:last-child { margin-bottom: 0; }
   .transcript::-webkit-scrollbar { width: 5px; }
   .transcript::-webkit-scrollbar-track { background: transparent; }
@@ -92,15 +93,16 @@
   .btn-save { background: var(--green); color: #fff; padding: 8px 16px; font-size: 14px; border-radius: 6px; }
   .btn-save:hover { background: var(--green-h); }
 
-  /* ── Debug log ── */
+  /* debug log */
   .debug-box {
     background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: var(--r);
-    padding: 10px 12px; max-height: 160px; overflow-y: auto; font-size: 11px;
+    padding: 10px 12px; max-height: 130px; overflow-y: auto; font-size: 11px;
     font-family: monospace; color: #6ee06e;
   }
-  .debug-box .d-hdr { color: #888; font-size: 10px; margin-bottom: 6px; }
+  .debug-box .d-hdr { color: #555; font-size: 10px; margin-bottom: 6px; }
   .debug-box .d-line { margin-bottom: 2px; word-break: break-all; }
-  .debug-box .d-line.audio { color: #2a6a2a; }
+  .debug-box .d-audio { color: #2a5a2a; }
+  .debug-box .d-err   { color: #e06e6e; }
   .debug-box::-webkit-scrollbar { width: 4px; }
   .debug-box::-webkit-scrollbar-thumb { background: #1a4a1a; }
 </style>
@@ -108,14 +110,12 @@
 <body>
 <div class="app">
 
-  <!-- Header -->
   <div class="header">
     <div class="dot" id="dot"></div>
     <h1>Speaking Translator</h1>
     <span class="status-text" id="statusText">Not connected</span>
   </div>
 
-  <!-- API Key -->
   <div class="card">
     <div class="card-label">OpenAI API Key — saved only in your browser, never sent elsewhere</div>
     <div class="api-row">
@@ -124,7 +124,6 @@
     </div>
   </div>
 
-  <!-- Language Pair -->
   <div class="lang-row">
     <div class="field">
       <label>You speak</label>
@@ -145,7 +144,6 @@
     </div>
   </div>
 
-  <!-- Transcript -->
   <div class="transcript" id="transcript">
     <p class="hint-text" id="hint">
       Press <strong>Start</strong> and speak in any language —
@@ -153,106 +151,87 @@
     </p>
   </div>
 
-  <!-- Mic Level -->
   <div class="meter-row">
     <span class="meter-lbl">Mic</span>
     <div class="meter-bg"><div class="meter-fill" id="meter"></div></div>
   </div>
 
-  <!-- Controls -->
   <div class="btn-row">
     <button class="btn-primary" id="startBtn" onclick="toggleSession()">▶ Start</button>
     <button class="btn-secondary" onclick="clearTranscript()">🗑 Clear</button>
   </div>
 
-  <!-- Debug Event Log -->
   <div class="debug-box" id="debugBox">
-    <div class="d-hdr">▼ Server events (debug log)</div>
+    <div class="d-hdr">▼ Server events</div>
   </div>
 
 </div>
-
 <script>
-// ═══════════════════════════════════════════════════════
-//  AudioWorklet
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════
+//  AudioWorklet (inline blob)
+// ═══════════════════════════════════════════════
 const WORKLET = `
 class PCMProc extends AudioWorkletProcessor {
-  constructor() { super(); this._buf = []; this._chunkSize = 480; }
+  constructor() { super(); this._buf=[]; this._chunkSize=480; }
   process(inputs) {
-    const ch = inputs[0]?.[0];
-    if (!ch) return true;
-    for (let i = 0; i < ch.length; i++) this._buf.push(ch[i]);
-    while (this._buf.length >= this._chunkSize) {
-      const raw = this._buf.splice(0, this._chunkSize);
-      const pcm16 = new Int16Array(this._chunkSize);
-      let ss = 0;
-      for (let i = 0; i < this._chunkSize; i++) {
-        const s = Math.max(-1, Math.min(1, raw[i]));
-        pcm16[i] = s < 0 ? s * 32768 : s * 32767;
-        ss += s * s;
+    const ch=inputs[0]?.[0]; if(!ch) return true;
+    for(let i=0;i<ch.length;i++) this._buf.push(ch[i]);
+    while(this._buf.length>=this._chunkSize){
+      const raw=this._buf.splice(0,this._chunkSize);
+      const pcm16=new Int16Array(this._chunkSize); let ss=0;
+      for(let i=0;i<this._chunkSize;i++){
+        const s=Math.max(-1,Math.min(1,raw[i]));
+        pcm16[i]=s<0?s*32768:s*32767; ss+=s*s;
       }
-      this.port.postMessage(
-        { buf: pcm16.buffer, rms: Math.sqrt(ss / this._chunkSize) },
-        [pcm16.buffer]
-      );
+      this.port.postMessage({buf:pcm16.buffer,rms:Math.sqrt(ss/this._chunkSize)},[pcm16.buffer]);
     }
     return true;
   }
 }
-registerProcessor('pcm-proc', PCMProc);
+registerProcessor('pcm-proc',PCMProc);
 `;
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  State
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════
 let ws=null, audioCtx=null, playCtx=null, micStream=null, workletNode=null;
-let isActive=false, playQueue=[], isPlaying=false, curLine=null;
-let dbgCount=0;
+let isActive=false, playQueue=[], isPlaying=false;
+let outPcm16Buf=[], whisperTimer=null;
+let dbgN=0;
 
 { const s=localStorage.getItem('oai_key'); if(s) document.getElementById('apiKeyInput').value=s; }
 { const l=localStorage.getItem('oai_outlang'); if(l) document.getElementById('outputLang').value=l; }
 
-// ═══════════════════════════════════════════════════════
-//  API Key / Status / Language
-// ═══════════════════════════════════════════════════════
-function saveKey() {
+// ═══════════════════════════════════════════════
+//  UI helpers
+// ═══════════════════════════════════════════════
+function saveKey(){
   const k=document.getElementById('apiKeyInput').value.trim(); if(!k) return;
   localStorage.setItem('oai_key',k);
   setStatus('Key saved ✓',''); setTimeout(()=>setStatus('Not connected',''),2000);
 }
-function getKey() {
-  return document.getElementById('apiKeyInput').value.trim()||localStorage.getItem('oai_key')||'';
+function getKey(){ return document.getElementById('apiKeyInput').value.trim()||localStorage.getItem('oai_key')||''; }
+function setStatus(t,c){
+  document.getElementById('statusText').textContent=t;
+  document.getElementById('dot').className='dot'+(c?' '+c:'');
 }
-function setStatus(text,cls) {
-  document.getElementById('statusText').textContent=text;
-  document.getElementById('dot').className='dot'+(cls?' '+cls:'');
-}
-function onLangChange() {
+function onLangChange(){
   const l=document.getElementById('outputLang').value;
   localStorage.setItem('oai_outlang',l);
   if(ws?.readyState===WebSocket.OPEN) sendSessionUpdate();
 }
-
-// ═══════════════════════════════════════════════════════
-//  Debug log
-// ═══════════════════════════════════════════════════════
-function dbgLog(type, extra) {
+function dbg(text, cls){
   const box=document.getElementById('debugBox');
-  const isAudio = type.includes('audio.delta');
   const d=document.createElement('div');
-  d.className='d-line'+(isAudio?' audio':'');
-  dbgCount++;
-  const extraStr = extra && !isAudio ? ' '+JSON.stringify(extra).slice(0,80) : '';
-  d.textContent=`[${dbgCount}] ← ${type}${extraStr}`;
-  box.appendChild(d);
-  box.scrollTop=box.scrollHeight;
+  d.className='d-line'+(cls?' '+cls:'');
+  d.textContent=`[${++dbgN}] ${text}`;
+  box.appendChild(d); box.scrollTop=box.scrollHeight;
 }
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  WebSocket
-// ═══════════════════════════════════════════════════════
-function openWS() {
+// ═══════════════════════════════════════════════
+function openWS(){
   const key=getKey();
   if(!key){alert('Please enter your OpenAI API key first.');return false;}
   setStatus('Connecting…','yellow');
@@ -260,131 +239,97 @@ function openWS() {
     'wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate',
     ['realtime',`openai-insecure-api-key.${key}`]
   );
-  ws.onopen   = () => setStatus('Connected','green');
-  ws.onmessage= (e) => onServerEvent(JSON.parse(e.data));
-  ws.onerror  = () => { setStatus('Connection error','red'); doStop(); };
-  ws.onclose  = () => { if(isActive) doStop(); };
+  ws.onopen   = ()=>setStatus('Connected','green');
+  ws.onmessage= (e)=>onServerEvent(JSON.parse(e.data));
+  ws.onerror  = ()=>{ setStatus('Connection error','red'); doStop(); };
+  ws.onclose  = ()=>{ if(isActive) doStop(); };
   return true;
 }
 
-function sendSessionUpdate() {
+function sendSessionUpdate(){
   if(ws?.readyState!==WebSocket.OPEN) return;
-  const lang = document.getElementById('outputLang').value;
-  const payload = {
+  const lang=document.getElementById('outputLang').value;
+  ws.send(JSON.stringify({
     type:'session.update',
     session:{
-      modalities: ['text', 'audio'],
       audio:{
         input:{
           transcription:{ model:'gpt-realtime-whisper' },
           noise_reduction:{ type:'near_field' }
         },
-        output:{
-          language: lang
-        }
+        output:{ language: lang }
       }
     }
-  };
-  console.log('→ session.update', JSON.stringify(payload, null, 2));
-  ws.send(JSON.stringify(payload));
+  }));
 }
 
-function onServerEvent(m) {
-  // すべてのイベントをデバッグログへ
-  dbgLog(m.type, m.type.includes('delta') ? null : m);
+function onServerEvent(m){
+  if(m.type==='session.output_audio.delta'){
+    dbg('← session.output_audio.delta','d-audio');
+    if(m.delta) enqueueAudio(m.delta);
+    return;
+  }
+  dbg('← '+m.type+' '+JSON.stringify(m).slice(0,60), m.type==='error'?'d-err':'');
+  console.log('← server:',m.type, m);
 
-  switch(m.type) {
-    case 'session.created':
-      sendSessionUpdate();
-      break;
-
-    case 'session.updated':
-      // セッション更新成功
-      break;
-
-    // ── テキスト出力（各フィールド名に対応）──
-    case 'session.output_text.delta':
-      appendText(m.delta ?? m.text ?? m.transcript ?? '');
-      break;
-    case 'session.output_text.done':
-      curLine = null;
-      break;
-
-    // ── 入力テキスト（転写）──
-    case 'session.input_audio_transcription.delta':
-      // 入力の転写（翻訳ではなく元の言語）
-      break;
-
-    // ── 音声出力 ──
-    case 'session.output_audio.delta':
-      if(m.delta) enqueueAudio(m.delta);
-      break;
-
+  switch(m.type){
+    case 'session.created': sendSessionUpdate(); break;
+    case 'session.output_text.delta': setLineText(m.delta??m.text??''); break;
     case 'error':
       setStatus('API error: '+(m.error?.message??'?'),'red');
-      dbgLog('ERROR: '+(m.error?.message??'?'));
-      console.error('OpenAI error',m);
-      break;
-
-    // ── 未知のイベントはコンソールへ ──
-    default:
-      console.log('← unknown event:', m.type, m);
       break;
   }
 }
 
-// ═══════════════════════════════════════════════════════
-//  Microphone capture
-// ═══════════════════════════════════════════════════════
-async function startMic() {
-  audioCtx = new AudioContext({sampleRate:24000});
-  playCtx  = new AudioContext({sampleRate:24000});
-
-  const blob = new Blob([WORKLET],{type:'application/javascript'});
-  const url  = URL.createObjectURL(blob);
+// ═══════════════════════════════════════════════
+//  Microphone
+// ═══════════════════════════════════════════════
+async function startMic(){
+  audioCtx=new AudioContext({sampleRate:24000});
+  playCtx =new AudioContext({sampleRate:24000});
+  const blob=new Blob([WORKLET],{type:'application/javascript'});
+  const url=URL.createObjectURL(blob);
   await audioCtx.audioWorklet.addModule(url);
   URL.revokeObjectURL(url);
-
-  micStream = await navigator.mediaDevices.getUserMedia({
-    audio:{echoCancellation:true, noiseSuppression:true, sampleRate:24000}
-  });
-
-  const src   = audioCtx.createMediaStreamSource(micStream);
-  workletNode = new AudioWorkletNode(audioCtx,'pcm-proc');
-
-  workletNode.port.onmessage = ({data:{buf,rms}}) => {
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:24000}});
+  const src=audioCtx.createMediaStreamSource(micStream);
+  workletNode=new AudioWorkletNode(audioCtx,'pcm-proc');
+  workletNode.port.onmessage=({data:{buf,rms}})=>{
     setMeter(rms);
-    if(ws?.readyState===WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type:'session.input_audio_buffer.append',
-        audio: bufToB64(buf)
-      }));
-    }
+    if(ws?.readyState===WebSocket.OPEN)
+      ws.send(JSON.stringify({type:'session.input_audio_buffer.append',audio:bufToB64(buf)}));
   };
-
   src.connect(workletNode);
 }
-
-function stopMic() {
+function stopMic(){
   workletNode?.disconnect(); workletNode=null;
   micStream?.getTracks().forEach(t=>t.stop()); micStream=null;
   audioCtx?.close(); audioCtx=null;
   setMeter(0);
 }
 
-// ═══════════════════════════════════════════════════════
-//  Audio playback
-// ═══════════════════════════════════════════════════════
-function enqueueAudio(b64) {
+// ═══════════════════════════════════════════════
+//  Audio playback + Whisper transcription
+// ═══════════════════════════════════════════════
+function enqueueAudio(b64){
   const raw=atob(b64);
-  const pcm=new Int16Array(raw.length/2);
-  for(let i=0;i<pcm.length;i++) pcm[i]=raw.charCodeAt(i*2)|(raw.charCodeAt(i*2+1)<<8);
-  const f32=new Float32Array(pcm.length);
-  for(let i=0;i<pcm.length;i++) f32[i]=pcm[i]/32768.0;
+  const pcm16=new Int16Array(raw.length/2);
+  for(let i=0;i<pcm16.length;i++)
+    pcm16[i]=raw.charCodeAt(i*2)|(raw.charCodeAt(i*2+1)<<8);
+
+  // Play
+  const f32=new Float32Array(pcm16.length);
+  for(let i=0;i<pcm16.length;i++) f32[i]=pcm16[i]/32768.0;
   playQueue.push(f32);
   if(!isPlaying) schedulePlay();
+
+  // Buffer for Whisper
+  for(let i=0;i<pcm16.length;i++) outPcm16Buf.push(pcm16[i]);
+  clearTimeout(whisperTimer);
+  whisperTimer=setTimeout(transcribeOutput, 700);
 }
-function schedulePlay() {
+
+function schedulePlay(){
   if(!playQueue.length||!playCtx){isPlaying=false;return;}
   isPlaying=true;
   const f32=playQueue.shift();
@@ -395,56 +340,109 @@ function schedulePlay() {
   src.onended=schedulePlay; src.start();
 }
 
-// ═══════════════════════════════════════════════════════
-//  Transcript
-// ═══════════════════════════════════════════════════════
-function appendText(t) {
-  if(!t) return;
-  const area=document.getElementById('transcript');
-  const hint=document.getElementById('hint'); if(hint) hint.remove();
-  if(!curLine){
-    curLine=document.createElement('p');
-    curLine.className='line';
-    area.appendChild(curLine);
-  }
-  curLine.textContent+=t;
-  area.scrollTop=area.scrollHeight;
-}
-function clearTranscript() {
-  document.getElementById('transcript').innerHTML=
-    '<p class="hint-text" id="hint">Press <strong>Start</strong> and speak in any language — translation will appear here in real time.</p>';
-  curLine=null;
+// WAV encoder (PCM16, mono)
+function pcm16ToWav(samples, sr){
+  const ab=new ArrayBuffer(44+samples.length*2);
+  const v=new DataView(ab);
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  ws(0,'RIFF'); v.setUint32(4,36+samples.length*2,true);
+  ws(8,'WAVE'); ws(12,'fmt '); v.setUint32(16,16,true);
+  v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+  v.setUint16(32,2,true); v.setUint16(34,16,true);
+  ws(36,'data'); v.setUint32(40,samples.length*2,true);
+  for(let i=0;i<samples.length;i++) v.setInt16(44+i*2,samples[i],true);
+  return ab;
 }
 
-// ═══════════════════════════════════════════════════════
-//  Level meter
-// ═══════════════════════════════════════════════════════
-function setMeter(rms) {
+async function transcribeOutput(){
+  if(!outPcm16Buf.length) return;
+  const pcm16=new Int16Array(outPcm16Buf);
+  outPcm16Buf=[];
+  const lang=document.getElementById('outputLang').value;
+
+  dbg(`→ Whisper (${pcm16.length} samples, lang=${lang})`);
+
+  const wav=pcm16ToWav(pcm16,24000);
+  const fd=new FormData();
+  fd.append('file',new Blob([wav],{type:'audio/wav'}),'audio.wav');
+  fd.append('model','whisper-1');
+  fd.append('language',lang);
+
+  try{
+    const res=await fetch('https://api.openai.com/v1/audio/transcriptions',{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${getKey()}`},
+      body:fd
+    });
+    const data=await res.json();
+    dbg(`← Whisper: "${(data.text||'').slice(0,50)}"`);
+    if(data.text) appendLine(data.text);
+  }catch(e){
+    dbg('Whisper error: '+e.message,'d-err');
+    console.error('Whisper error',e);
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  Transcript display
+// ═══════════════════════════════════════════════
+function setLineText(t){
+  // Used if Translation API ever sends text events directly
+  if(!t) return;
+  const area=document.getElementById('transcript');
+  document.getElementById('hint')?.remove();
+  let cur=area.querySelector('.line.current');
+  if(!cur){ cur=document.createElement('p'); cur.className='line current'; area.appendChild(cur); }
+  cur.textContent+=t;
+  area.scrollTop=area.scrollHeight;
+}
+
+function appendLine(text){
+  const area=document.getElementById('transcript');
+  document.getElementById('hint')?.remove();
+  // Remove "current" marker from previous
+  area.querySelectorAll('.line.current').forEach(el=>el.classList.remove('current'));
+  const p=document.createElement('p');
+  p.className='line'; p.textContent=text;
+  area.appendChild(p);
+  area.scrollTop=area.scrollHeight;
+}
+
+function clearTranscript(){
+  document.getElementById('transcript').innerHTML=
+    '<p class="hint-text" id="hint">Press <strong>Start</strong> and speak in any language — translation will appear here in real time.</p>';
+}
+
+// ═══════════════════════════════════════════════
+//  Meter
+// ═══════════════════════════════════════════════
+function setMeter(rms){
   const pct=Math.min(100,rms*500);
   const el=document.getElementById('meter');
   el.style.width=pct+'%';
   el.className='meter-fill'+(pct>8?' hot':'');
 }
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  Session toggle
-// ═══════════════════════════════════════════════════════
-async function toggleSession() { if(!isActive) await doStart(); else doStop(); }
-
-async function doStart() {
+// ═══════════════════════════════════════════════
+async function toggleSession(){ if(!isActive) await doStart(); else doStop(); }
+async function doStart(){
   if(!openWS()) return;
-  try {
+  try{
     await startMic();
     isActive=true;
     const btn=document.getElementById('startBtn');
     btn.textContent='■ Stop'; btn.classList.add('danger');
-  } catch(e) {
+  }catch(e){
     setStatus('Microphone access denied','red');
     ws?.close(); ws=null;
   }
 }
-function doStop() {
+function doStop(){
   isActive=false; playQueue=[]; isPlaying=false;
+  outPcm16Buf=[]; clearTimeout(whisperTimer);
   stopMic();
   if(ws&&ws.readyState<WebSocket.CLOSING) ws.close(); ws=null;
   playCtx?.close(); playCtx=null;
@@ -453,10 +451,10 @@ function doStop() {
   btn.textContent='▶ Start'; btn.classList.remove('danger');
 }
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  Utility
-// ═══════════════════════════════════════════════════════
-function bufToB64(buf) {
+// ═══════════════════════════════════════════════
+function bufToB64(buf){
   const b=new Uint8Array(buf); let s='';
   for(let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]);
   return btoa(s);
