@@ -21,11 +21,13 @@
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: var(--bg); color: var(--text);
-    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 16px;
   }
   .app { width: 100%; max-width: 700px; display: flex; flex-direction: column; gap: 14px; }
 
-  .header { display: flex; align-items: center; gap: 10px; }
+  /* ── Header ── */
+  .header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .header h1 { font-size: 20px; font-weight: 600; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0; transition: background .3s; }
   .dot.yellow { background: #f59e0b; }
@@ -33,93 +35,114 @@
   .dot.red    { background: var(--red); }
   .status-text { font-size: 13px; color: var(--muted); margin-left: auto; }
 
+  /* ── Card ── */
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; }
   .card-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 
+  /* ── API Key ── */
   .api-row { display: flex; gap: 8px; }
   input[type=password] {
     flex: 1; background: var(--bg); border: 1px solid var(--border);
     border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 14px; font-family: monospace;
+    min-width: 0;
   }
   input[type=password]:focus { outline: none; border-color: var(--green); }
 
-  .lang-row { display: flex; align-items: flex-end; gap: 10px; }
-  .field { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+  /* ── Language row ── */
+  .lang-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+  .field { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 5px; }
   .field label { font-size: 12px; color: var(--muted); }
   .auto-badge {
     font-size: 11px; color: var(--green); background: #10a37f22;
-    border: 1px solid #10a37f44; border-radius: 4px; padding: 2px 6px;
-    display: inline-block; margin-top: 2px;
+    border: 1px solid #10a37f44; border-radius: 4px; padding: 3px 8px;
+    display: inline-block;
   }
   select {
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
     padding: 9px 12px; color: var(--text); font-size: 14px; cursor: pointer; width: 100%;
   }
   select:focus { outline: none; border-color: var(--green); }
-  .arrow-lbl { font-size: 22px; color: var(--muted); padding-bottom: 6px; line-height: 1; }
+  .arrow-lbl { font-size: 22px; color: var(--muted); padding-bottom: 6px; line-height: 1; flex-shrink: 0; }
 
-  /* transcript */
+  /* ── Transcript ── */
+  .transcript-wrap { position: relative; }
   .transcript {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--r);
-    padding: 18px; min-height: 220px; max-height: 360px; overflow-y: auto;
+    padding: 18px 18px 48px; min-height: 220px; max-height: 380px; overflow-y: auto;
   }
   .hint-text { color: var(--muted); font-size: 15px; line-height: 1.7; }
   .hint-text strong { color: #bbb; }
 
-  .entry { margin-bottom: 16px; }
+  .entry { margin-bottom: 18px; }
   .entry:last-child { margin-bottom: 0; }
-  .entry .orig  { font-size: 12px; color: var(--muted); margin-bottom: 3px; min-height: 16px; }
+  .entry .orig  { font-size: 12px; color: var(--muted); margin-bottom: 3px; line-height: 1.5; }
   .entry .trans { font-size: 22px; line-height: 1.5; word-break: break-word; color: var(--text); }
 
   .transcript::-webkit-scrollbar { width: 5px; }
   .transcript::-webkit-scrollbar-track { background: transparent; }
   .transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
+  /* copy button (bottom-right of transcript) */
+  .copy-btn {
+    position: absolute; bottom: 10px; right: 10px;
+    background: var(--border); color: var(--muted); border: none;
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .copy-btn:hover { background: #3d3d3d; color: var(--text); }
+  .copy-btn.copied { background: var(--green); color: #fff; }
+
+  /* ── Meter ── */
   .meter-row { display: flex; align-items: center; gap: 10px; }
-  .meter-lbl { font-size: 12px; color: var(--muted); width: 28px; }
+  .meter-lbl { font-size: 12px; color: var(--muted); width: 28px; flex-shrink: 0; }
   .meter-bg { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
   .meter-fill { height: 100%; width: 0%; background: var(--green); border-radius: 3px; transition: width .04s; }
   .meter-fill.hot { background: #34d399; }
 
+  /* ── Buttons ── */
   .btn-row { display: flex; gap: 10px; }
   button {
-    padding: 10px 18px; border-radius: 8px; border: none;
+    padding: 12px 18px; border-radius: 8px; border: none;
     font-size: 14px; font-weight: 500; cursor: pointer;
     transition: background .15s, opacity .15s; font-family: inherit;
   }
   button:disabled { opacity: .4; cursor: default; }
-  .btn-primary { background: var(--green); color: #fff; flex: 1; font-size: 15px; }
+  .btn-primary { background: var(--green); color: #fff; flex: 1; font-size: 16px; }
   .btn-primary:hover:not(:disabled) { background: var(--green-h); }
   .btn-primary.danger { background: var(--red); }
   .btn-primary.danger:hover:not(:disabled) { background: var(--red-h); }
-  .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 12px 16px; }
   .btn-secondary:hover:not(:disabled) { background: var(--border); }
-  .btn-save { background: var(--green); color: #fff; padding: 8px 16px; font-size: 14px; border-radius: 6px; }
+  .btn-save { background: var(--green); color: #fff; padding: 8px 16px; font-size: 14px; border-radius: 6px; flex-shrink: 0; }
   .btn-save:hover { background: var(--green-h); }
 
-  /* debug */
-  .debug-box {
-    background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: var(--r);
-    padding: 10px 12px; max-height: 120px; overflow-y: auto;
-    font-size: 11px; font-family: monospace; color: #6ee06e;
+  /* ── Shortcut hint ── */
+  .shortcut-hint { text-align: center; font-size: 11px; color: #555; }
+
+  /* ── Mobile ── */
+  @media (max-width: 480px) {
+    body { padding: 12px; align-items: flex-start; }
+    .header h1 { font-size: 17px; }
+    .lang-row { gap: 8px; }
+    .arrow-lbl { display: none; }
+    .transcript { min-height: 180px; max-height: 300px; }
+    .entry .trans { font-size: 19px; }
+    .btn-primary { font-size: 15px; padding: 14px 12px; }
+    .shortcut-hint { display: none; }
   }
-  .debug-box .d-hdr { color: #555; font-size: 10px; margin-bottom: 5px; }
-  .debug-box .d-line { margin-bottom: 2px; word-break: break-all; }
-  .debug-box .d-audio { color: #2a5a2a; }
-  .debug-box .d-err   { color: #e06e6e; }
-  .debug-box::-webkit-scrollbar { width: 4px; }
-  .debug-box::-webkit-scrollbar-thumb { background: #1a4a1a; }
 </style>
 </head>
 <body>
 <div class="app">
 
+  <!-- Header -->
   <div class="header">
     <div class="dot" id="dot"></div>
     <h1>Speaking Translator</h1>
     <span class="status-text" id="statusText">Not connected</span>
   </div>
 
+  <!-- API Key -->
   <div class="card">
     <div class="card-label">OpenAI API Key — saved only in your browser, never sent elsewhere</div>
     <div class="api-row">
@@ -128,6 +151,7 @@
     </div>
   </div>
 
+  <!-- Language Pair -->
   <div class="lang-row">
     <div class="field">
       <label>You speak</label>
@@ -137,37 +161,42 @@
     <div class="field">
       <label>Translate to</label>
       <select id="outputLang" onchange="onLangChange()">
-        <option value="en">English</option>
-        <option value="ja">Japanese</option>
-        <option value="zh">Chinese</option>
-        <option value="ko">Korean</option>
-        <option value="es">Spanish</option>
-        <option value="fr">French</option>
-        <option value="de">German</option>
+        <option value="en">🇺🇸 English</option>
+        <option value="ja">🇯🇵 Japanese</option>
+        <option value="zh">🇨🇳 Chinese</option>
+        <option value="ko">🇰🇷 Korean</option>
+        <option value="es">🇪🇸 Spanish</option>
+        <option value="fr">🇫🇷 French</option>
+        <option value="de">🇩🇪 German</option>
       </select>
     </div>
   </div>
 
-  <div class="transcript" id="transcript">
-    <p class="hint-text" id="hint">
-      Press <strong>Start</strong> and speak in any language —
-      translation will appear here in real time.
-    </p>
+  <!-- Transcript -->
+  <div class="transcript-wrap">
+    <div class="transcript" id="transcript">
+      <p class="hint-text" id="hint">
+        Press <strong>Start</strong> and speak in any language —
+        translation will appear here in real time.
+      </p>
+    </div>
+    <button class="copy-btn" id="copyBtn" onclick="copyAll()" title="Copy all translations">📋 Copy</button>
   </div>
 
+  <!-- Mic Level -->
   <div class="meter-row">
     <span class="meter-lbl">Mic</span>
     <div class="meter-bg"><div class="meter-fill" id="meter"></div></div>
   </div>
 
+  <!-- Controls -->
   <div class="btn-row">
     <button class="btn-primary" id="startBtn" onclick="toggleSession()">▶ Start</button>
     <button class="btn-secondary" onclick="clearTranscript()">🗑 Clear</button>
   </div>
 
-  <div class="debug-box" id="debugBox">
-    <div class="d-hdr">▼ Server events</div>
-  </div>
+  <!-- Shortcut hint -->
+  <div class="shortcut-hint">Press <kbd>Space</kbd> to start / stop</div>
 
 </div>
 <script>
@@ -200,8 +229,7 @@ registerProcessor('pcm-proc',PCMProc);
 // ═══════════════════════════════════════════════
 let ws=null, audioCtx=null, playCtx=null, micStream=null, workletNode=null;
 let isActive=false, playQueue=[], isPlaying=false;
-let curEntry=null;   // { orig, trans } DOM refs for the current phrase
-let dbgN=0;
+let curEntry=null;
 
 { const s=localStorage.getItem('oai_key'); if(s) document.getElementById('apiKeyInput').value=s; }
 { const l=localStorage.getItem('oai_outlang'); if(l) document.getElementById('outputLang').value=l; }
@@ -224,13 +252,34 @@ function onLangChange(){
   localStorage.setItem('oai_outlang',l);
   if(ws?.readyState===WebSocket.OPEN) sendSessionUpdate();
 }
-function dbg(text, cls){
-  const box=document.getElementById('debugBox');
-  const d=document.createElement('div');
-  d.className='d-line'+(cls?' '+cls:'');
-  d.textContent=`[${++dbgN}] ${text}`;
-  box.appendChild(d); box.scrollTop=box.scrollHeight;
+
+// ═══════════════════════════════════════════════
+//  Copy all translations
+// ═══════════════════════════════════════════════
+function copyAll(){
+  const entries=[...document.querySelectorAll('.entry')];
+  if(!entries.length) return;
+  const text=entries.map(e=>{
+    const orig=e.querySelector('.orig')?.textContent?.trim();
+    const trans=e.querySelector('.trans')?.textContent?.trim();
+    return orig ? `[${orig}]\n${trans}` : trans;
+  }).filter(Boolean).join('\n\n');
+  navigator.clipboard.writeText(text).then(()=>{
+    const btn=document.getElementById('copyBtn');
+    btn.textContent='✓ Copied!'; btn.classList.add('copied');
+    setTimeout(()=>{ btn.textContent='📋 Copy'; btn.classList.remove('copied'); },2000);
+  });
 }
+
+// ═══════════════════════════════════════════════
+//  Keyboard shortcut  (Space = toggle)
+// ═══════════════════════════════════════════════
+document.addEventListener('keydown', e=>{
+  if(e.code==='Space' && e.target.tagName!=='INPUT' && e.target.tagName!=='TEXTAREA'){
+    e.preventDefault();
+    toggleSession();
+  }
+});
 
 // ═══════════════════════════════════════════════
 //  WebSocket
@@ -252,7 +301,6 @@ function openWS(){
 
 function sendSessionUpdate(){
   if(ws?.readyState!==WebSocket.OPEN) return;
-  const lang=document.getElementById('outputLang').value;
   ws.send(JSON.stringify({
     type:'session.update',
     session:{
@@ -261,32 +309,18 @@ function sendSessionUpdate(){
           transcription:{ model:'gpt-realtime-whisper' },
           noise_reduction:{ type:'near_field' }
         },
-        output:{ language: lang }
+        output:{ language: document.getElementById('outputLang').value }
       }
     }
   }));
 }
 
 function onServerEvent(m){
-  // audio delta: log dimly, handle, return
-  if(m.type==='session.output_audio.delta'){
-    dbg('← session.output_audio.delta','d-audio');
-    if(m.delta) enqueueAudio(m.delta);
-    return;
-  }
-
-  // all other events: full log
-  const preview=JSON.stringify(m).slice(0,70);
-  dbg('← '+m.type+' '+preview, m.type==='error'?'d-err':'');
-  console.log('← server:',m.type, m);
-
   switch(m.type){
-
     case 'session.created':
       sendSessionUpdate();
       break;
 
-    // ── 翻訳出力テキスト（output_transcript = 翻訳後の音声の文字起こし）──
     case 'session.output_transcript.delta':
       appendTransDelta(m.delta ?? m.transcript ?? '');
       break;
@@ -294,16 +328,23 @@ function onServerEvent(m){
       finishEntry();
       break;
 
-    // ── 入力テキスト（input_transcript = 元の発話の文字起こし）──
     case 'session.input_transcript.delta':
       appendOrigDelta(m.delta ?? m.transcript ?? '');
       break;
     case 'session.input_transcript.done':
       break;
 
+    case 'session.output_audio.delta':
+      if(m.delta) enqueueAudio(m.delta);
+      break;
+
     case 'error':
       setStatus('API error: '+(m.error?.message??'?'),'red');
+      console.error('OpenAI error', m);
       break;
+
+    default:
+      console.log('← server:', m.type, m);
   }
 }
 
@@ -317,7 +358,9 @@ async function startMic(){
   const url=URL.createObjectURL(blob);
   await audioCtx.audioWorklet.addModule(url);
   URL.revokeObjectURL(url);
-  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:24000}});
+  micStream=await navigator.mediaDevices.getUserMedia({
+    audio:{echoCancellation:true,noiseSuppression:true,sampleRate:24000}
+  });
   const src=audioCtx.createMediaStreamSource(micStream);
   workletNode=new AudioWorkletNode(audioCtx,'pcm-proc');
   workletNode.port.onmessage=({data:{buf,rms}})=>{
@@ -359,7 +402,6 @@ function schedulePlay(){
 
 // ═══════════════════════════════════════════════
 //  Transcript display
-//  各フレーズ: { orig(小・グレー), trans(大・白) }
 // ═══════════════════════════════════════════════
 function ensureEntry(){
   if(curEntry) return;
@@ -372,24 +414,17 @@ function ensureEntry(){
   area.appendChild(div);
   curEntry={orig,trans};
 }
-
 function appendOrigDelta(t){
-  if(!t) return;
-  ensureEntry();
+  if(!t) return; ensureEntry();
   curEntry.orig.textContent+=t;
   document.getElementById('transcript').scrollTop=99999;
 }
-
 function appendTransDelta(t){
-  if(!t) return;
-  ensureEntry();
+  if(!t) return; ensureEntry();
   curEntry.trans.textContent+=t;
   document.getElementById('transcript').scrollTop=99999;
 }
-
-function finishEntry(){
-  curEntry=null;   // 次のフレーズは新しい entry へ
-}
+function finishEntry(){ curEntry=null; }
 
 function clearTranscript(){
   document.getElementById('transcript').innerHTML=
@@ -414,8 +449,7 @@ async function toggleSession(){ if(!isActive) await doStart(); else doStop(); }
 async function doStart(){
   if(!openWS()) return;
   try{
-    await startMic();
-    isActive=true;
+    await startMic(); isActive=true;
     const btn=document.getElementById('startBtn');
     btn.textContent='■ Stop'; btn.classList.add('danger');
   }catch(e){
