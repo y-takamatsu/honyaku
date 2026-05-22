@@ -25,7 +25,6 @@
   }
   .app { width: 100%; max-width: 700px; display: flex; flex-direction: column; gap: 14px; }
 
-  /* ── Header ── */
   .header { display: flex; align-items: center; gap: 10px; }
   .header h1 { font-size: 20px; font-weight: 600; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0; transition: background .3s; }
@@ -34,11 +33,9 @@
   .dot.red    { background: var(--red); }
   .status-text { font-size: 13px; color: var(--muted); margin-left: auto; }
 
-  /* ── Card ── */
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; }
   .card-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 
-  /* ── API Key ── */
   .api-row { display: flex; gap: 8px; }
   input[type=password] {
     flex: 1; background: var(--bg); border: 1px solid var(--border);
@@ -46,7 +43,6 @@
   }
   input[type=password]:focus { outline: none; border-color: var(--green); }
 
-  /* ── Language row ── */
   .lang-row { display: flex; align-items: flex-end; gap: 10px; }
   .field { flex: 1; display: flex; flex-direction: column; gap: 5px; }
   .field label { font-size: 12px; color: var(--muted); }
@@ -62,7 +58,6 @@
   select:focus { outline: none; border-color: var(--green); }
   .arrow-lbl { font-size: 22px; color: var(--muted); padding-bottom: 6px; line-height: 1; }
 
-  /* ── Transcript ── */
   .transcript {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--r);
     padding: 18px; min-height: 200px; max-height: 340px; overflow-y: auto;
@@ -75,14 +70,12 @@
   .transcript::-webkit-scrollbar-track { background: transparent; }
   .transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-  /* ── Meter ── */
   .meter-row { display: flex; align-items: center; gap: 10px; }
   .meter-lbl { font-size: 12px; color: var(--muted); width: 28px; }
   .meter-bg { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
   .meter-fill { height: 100%; width: 0%; background: var(--green); border-radius: 3px; transition: width .04s; }
   .meter-fill.hot { background: #34d399; }
 
-  /* ── Buttons ── */
   .btn-row { display: flex; gap: 10px; }
   button {
     padding: 10px 18px; border-radius: 8px; border: none;
@@ -98,6 +91,18 @@
   .btn-secondary:hover:not(:disabled) { background: var(--border); }
   .btn-save { background: var(--green); color: #fff; padding: 8px 16px; font-size: 14px; border-radius: 6px; }
   .btn-save:hover { background: var(--green-h); }
+
+  /* ── Debug log ── */
+  .debug-box {
+    background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: var(--r);
+    padding: 10px 12px; max-height: 160px; overflow-y: auto; font-size: 11px;
+    font-family: monospace; color: #6ee06e;
+  }
+  .debug-box .d-hdr { color: #888; font-size: 10px; margin-bottom: 6px; }
+  .debug-box .d-line { margin-bottom: 2px; word-break: break-all; }
+  .debug-box .d-line.audio { color: #2a6a2a; }
+  .debug-box::-webkit-scrollbar { width: 4px; }
+  .debug-box::-webkit-scrollbar-thumb { background: #1a4a1a; }
 </style>
 </head>
 <body>
@@ -129,13 +134,13 @@
     <div class="field">
       <label>Translate to</label>
       <select id="outputLang" onchange="onLangChange()">
-        <option value="en">English 🇺🇸</option>
-        <option value="ja">Japanese 🇯🇵</option>
-        <option value="zh">Chinese 🇨🇳</option>
-        <option value="ko">Korean 🇰🇷</option>
-        <option value="es">Spanish 🇪🇸</option>
-        <option value="fr">French 🇫🇷</option>
-        <option value="de">German 🇩🇪</option>
+        <option value="en">English</option>
+        <option value="ja">Japanese</option>
+        <option value="zh">Chinese</option>
+        <option value="ko">Korean</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+        <option value="de">German</option>
       </select>
     </div>
   </div>
@@ -158,6 +163,11 @@
   <div class="btn-row">
     <button class="btn-primary" id="startBtn" onclick="toggleSession()">▶ Start</button>
     <button class="btn-secondary" onclick="clearTranscript()">🗑 Clear</button>
+  </div>
+
+  <!-- Debug Event Log -->
+  <div class="debug-box" id="debugBox">
+    <div class="d-hdr">▼ Server events (debug log)</div>
   </div>
 
 </div>
@@ -198,6 +208,7 @@ registerProcessor('pcm-proc', PCMProc);
 // ═══════════════════════════════════════════════════════
 let ws=null, audioCtx=null, playCtx=null, micStream=null, workletNode=null;
 let isActive=false, playQueue=[], isPlaying=false, curLine=null;
+let dbgCount=0;
 
 { const s=localStorage.getItem('oai_key'); if(s) document.getElementById('apiKeyInput').value=s; }
 { const l=localStorage.getItem('oai_outlang'); if(l) document.getElementById('outputLang').value=l; }
@@ -224,6 +235,21 @@ function onLangChange() {
 }
 
 // ═══════════════════════════════════════════════════════
+//  Debug log
+// ═══════════════════════════════════════════════════════
+function dbgLog(type, extra) {
+  const box=document.getElementById('debugBox');
+  const isAudio = type.includes('audio.delta');
+  const d=document.createElement('div');
+  d.className='d-line'+(isAudio?' audio':'');
+  dbgCount++;
+  const extraStr = extra && !isAudio ? ' '+JSON.stringify(extra).slice(0,80) : '';
+  d.textContent=`[${dbgCount}] ← ${type}${extraStr}`;
+  box.appendChild(d);
+  box.scrollTop=box.scrollHeight;
+}
+
+// ═══════════════════════════════════════════════════════
 //  WebSocket
 // ═══════════════════════════════════════════════════════
 function openWS() {
@@ -243,52 +269,66 @@ function openWS() {
 
 function sendSessionUpdate() {
   if(ws?.readyState!==WebSocket.OPEN) return;
-  ws.send(JSON.stringify({
+  const lang = document.getElementById('outputLang').value;
+  const payload = {
     type:'session.update',
     session:{
+      modalities: ['text', 'audio'],
       audio:{
         input:{
           transcription:{ model:'gpt-realtime-whisper' },
           noise_reduction:{ type:'near_field' }
         },
         output:{
-          language: document.getElementById('outputLang').value,
-          transcription:{ model:'gpt-realtime-whisper' }  // ← テキスト出力を有効化
+          language: lang
         }
       }
     }
-  }));
+  };
+  console.log('→ session.update', JSON.stringify(payload, null, 2));
+  ws.send(JSON.stringify(payload));
 }
 
 function onServerEvent(m) {
-  // すべてのサーバーイベントをコンソールに記録（デバッグ用）
-  if(m.type !== 'session.output_audio.delta') {
-    console.log('← server:', m.type, m);
-  }
+  // すべてのイベントをデバッグログへ
+  dbgLog(m.type, m.type.includes('delta') ? null : m);
 
   switch(m.type) {
-    // ── セッション管理 ──────────────────────────────
     case 'session.created':
       sendSessionUpdate();
       break;
 
-    // ── テキスト出力 ──────────────────────────────────
+    case 'session.updated':
+      // セッション更新成功
+      break;
+
+    // ── テキスト出力（各フィールド名に対応）──
     case 'session.output_text.delta':
-      appendText(m.delta ?? m.text ?? '');
+      appendText(m.delta ?? m.text ?? m.transcript ?? '');
       break;
     case 'session.output_text.done':
       curLine = null;
       break;
 
-    // ── 音声出力 ──────────────────────────────────────
+    // ── 入力テキスト（転写）──
+    case 'session.input_audio_transcription.delta':
+      // 入力の転写（翻訳ではなく元の言語）
+      break;
+
+    // ── 音声出力 ──
     case 'session.output_audio.delta':
       if(m.delta) enqueueAudio(m.delta);
       break;
 
-    // ── エラー ──────────────────────────────────────
     case 'error':
       setStatus('API error: '+(m.error?.message??'?'),'red');
+      dbgLog('ERROR: '+(m.error?.message??'?'));
       console.error('OpenAI error',m);
+      break;
+
+    // ── 未知のイベントはコンソールへ ──
+    default:
+      console.log('← unknown event:', m.type, m);
       break;
   }
 }
