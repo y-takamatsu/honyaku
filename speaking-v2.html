@@ -58,15 +58,19 @@
   select:focus { outline: none; border-color: var(--green); }
   .arrow-lbl { font-size: 22px; color: var(--muted); padding-bottom: 6px; line-height: 1; }
 
+  /* transcript */
   .transcript {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--r);
-    padding: 18px; min-height: 200px; max-height: 340px; overflow-y: auto;
+    padding: 18px; min-height: 220px; max-height: 360px; overflow-y: auto;
   }
   .hint-text { color: var(--muted); font-size: 15px; line-height: 1.7; }
   .hint-text strong { color: #bbb; }
-  .line { font-size: 20px; line-height: 1.65; margin-bottom: 10px; word-break: break-word; }
-  .line.pending { color: var(--muted); font-style: italic; }
-  .line:last-child { margin-bottom: 0; }
+
+  .entry { margin-bottom: 16px; }
+  .entry:last-child { margin-bottom: 0; }
+  .entry .orig  { font-size: 12px; color: var(--muted); margin-bottom: 3px; min-height: 16px; }
+  .entry .trans { font-size: 22px; line-height: 1.5; word-break: break-word; color: var(--text); }
+
   .transcript::-webkit-scrollbar { width: 5px; }
   .transcript::-webkit-scrollbar-track { background: transparent; }
   .transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -93,13 +97,13 @@
   .btn-save { background: var(--green); color: #fff; padding: 8px 16px; font-size: 14px; border-radius: 6px; }
   .btn-save:hover { background: var(--green-h); }
 
-  /* debug log */
+  /* debug */
   .debug-box {
     background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: var(--r);
-    padding: 10px 12px; max-height: 130px; overflow-y: auto; font-size: 11px;
-    font-family: monospace; color: #6ee06e;
+    padding: 10px 12px; max-height: 120px; overflow-y: auto;
+    font-size: 11px; font-family: monospace; color: #6ee06e;
   }
-  .debug-box .d-hdr { color: #555; font-size: 10px; margin-bottom: 6px; }
+  .debug-box .d-hdr { color: #555; font-size: 10px; margin-bottom: 5px; }
   .debug-box .d-line { margin-bottom: 2px; word-break: break-all; }
   .debug-box .d-audio { color: #2a5a2a; }
   .debug-box .d-err   { color: #e06e6e; }
@@ -196,7 +200,7 @@ registerProcessor('pcm-proc',PCMProc);
 // ═══════════════════════════════════════════════
 let ws=null, audioCtx=null, playCtx=null, micStream=null, workletNode=null;
 let isActive=false, playQueue=[], isPlaying=false;
-let outPcm16Buf=[], whisperTimer=null;
+let curEntry=null;   // { orig, trans } DOM refs for the current phrase
 let dbgN=0;
 
 { const s=localStorage.getItem('oai_key'); if(s) document.getElementById('apiKeyInput').value=s; }
@@ -264,17 +268,39 @@ function sendSessionUpdate(){
 }
 
 function onServerEvent(m){
+  // audio delta: log dimly, handle, return
   if(m.type==='session.output_audio.delta'){
     dbg('← session.output_audio.delta','d-audio');
     if(m.delta) enqueueAudio(m.delta);
     return;
   }
-  dbg('← '+m.type+' '+JSON.stringify(m).slice(0,60), m.type==='error'?'d-err':'');
+
+  // all other events: full log
+  const preview=JSON.stringify(m).slice(0,70);
+  dbg('← '+m.type+' '+preview, m.type==='error'?'d-err':'');
   console.log('← server:',m.type, m);
 
   switch(m.type){
-    case 'session.created': sendSessionUpdate(); break;
-    case 'session.output_text.delta': setLineText(m.delta??m.text??''); break;
+
+    case 'session.created':
+      sendSessionUpdate();
+      break;
+
+    // ── 翻訳出力テキスト（output_transcript = 翻訳後の音声の文字起こし）──
+    case 'session.output_transcript.delta':
+      appendTransDelta(m.delta ?? m.transcript ?? '');
+      break;
+    case 'session.output_transcript.done':
+      finishEntry();
+      break;
+
+    // ── 入力テキスト（input_transcript = 元の発話の文字起こし）──
+    case 'session.input_transcript.delta':
+      appendOrigDelta(m.delta ?? m.transcript ?? '');
+      break;
+    case 'session.input_transcript.done':
+      break;
+
     case 'error':
       setStatus('API error: '+(m.error?.message??'?'),'red');
       break;
@@ -309,26 +335,17 @@ function stopMic(){
 }
 
 // ═══════════════════════════════════════════════
-//  Audio playback + Whisper transcription
+//  Audio playback
 // ═══════════════════════════════════════════════
 function enqueueAudio(b64){
   const raw=atob(b64);
   const pcm16=new Int16Array(raw.length/2);
-  for(let i=0;i<pcm16.length;i++)
-    pcm16[i]=raw.charCodeAt(i*2)|(raw.charCodeAt(i*2+1)<<8);
-
-  // Play
+  for(let i=0;i<pcm16.length;i++) pcm16[i]=raw.charCodeAt(i*2)|(raw.charCodeAt(i*2+1)<<8);
   const f32=new Float32Array(pcm16.length);
   for(let i=0;i<pcm16.length;i++) f32[i]=pcm16[i]/32768.0;
   playQueue.push(f32);
   if(!isPlaying) schedulePlay();
-
-  // Buffer for Whisper
-  for(let i=0;i<pcm16.length;i++) outPcm16Buf.push(pcm16[i]);
-  clearTimeout(whisperTimer);
-  whisperTimer=setTimeout(transcribeOutput, 700);
 }
-
 function schedulePlay(){
   if(!playQueue.length||!playCtx){isPlaying=false;return;}
   isPlaying=true;
@@ -340,78 +357,44 @@ function schedulePlay(){
   src.onended=schedulePlay; src.start();
 }
 
-// WAV encoder (PCM16, mono)
-function pcm16ToWav(samples, sr){
-  const ab=new ArrayBuffer(44+samples.length*2);
-  const v=new DataView(ab);
-  const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
-  ws(0,'RIFF'); v.setUint32(4,36+samples.length*2,true);
-  ws(8,'WAVE'); ws(12,'fmt '); v.setUint32(16,16,true);
-  v.setUint16(20,1,true); v.setUint16(22,1,true);
-  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
-  v.setUint16(32,2,true); v.setUint16(34,16,true);
-  ws(36,'data'); v.setUint32(40,samples.length*2,true);
-  for(let i=0;i<samples.length;i++) v.setInt16(44+i*2,samples[i],true);
-  return ab;
-}
-
-async function transcribeOutput(){
-  if(!outPcm16Buf.length) return;
-  const pcm16=new Int16Array(outPcm16Buf);
-  outPcm16Buf=[];
-  const lang=document.getElementById('outputLang').value;
-
-  dbg(`→ Whisper (${pcm16.length} samples, lang=${lang})`);
-
-  const wav=pcm16ToWav(pcm16,24000);
-  const fd=new FormData();
-  fd.append('file',new Blob([wav],{type:'audio/wav'}),'audio.wav');
-  fd.append('model','whisper-1');
-  fd.append('language',lang);
-
-  try{
-    const res=await fetch('https://api.openai.com/v1/audio/transcriptions',{
-      method:'POST',
-      headers:{'Authorization':`Bearer ${getKey()}`},
-      body:fd
-    });
-    const data=await res.json();
-    dbg(`← Whisper: "${(data.text||'').slice(0,50)}"`);
-    if(data.text) appendLine(data.text);
-  }catch(e){
-    dbg('Whisper error: '+e.message,'d-err');
-    console.error('Whisper error',e);
-  }
-}
-
 // ═══════════════════════════════════════════════
 //  Transcript display
+//  各フレーズ: { orig(小・グレー), trans(大・白) }
 // ═══════════════════════════════════════════════
-function setLineText(t){
-  // Used if Translation API ever sends text events directly
-  if(!t) return;
+function ensureEntry(){
+  if(curEntry) return;
   const area=document.getElementById('transcript');
   document.getElementById('hint')?.remove();
-  let cur=area.querySelector('.line.current');
-  if(!cur){ cur=document.createElement('p'); cur.className='line current'; area.appendChild(cur); }
-  cur.textContent+=t;
-  area.scrollTop=area.scrollHeight;
+  const div=document.createElement('div'); div.className='entry';
+  const orig=document.createElement('div'); orig.className='orig';
+  const trans=document.createElement('div'); trans.className='trans';
+  div.appendChild(orig); div.appendChild(trans);
+  area.appendChild(div);
+  curEntry={orig,trans};
 }
 
-function appendLine(text){
-  const area=document.getElementById('transcript');
-  document.getElementById('hint')?.remove();
-  // Remove "current" marker from previous
-  area.querySelectorAll('.line.current').forEach(el=>el.classList.remove('current'));
-  const p=document.createElement('p');
-  p.className='line'; p.textContent=text;
-  area.appendChild(p);
-  area.scrollTop=area.scrollHeight;
+function appendOrigDelta(t){
+  if(!t) return;
+  ensureEntry();
+  curEntry.orig.textContent+=t;
+  document.getElementById('transcript').scrollTop=99999;
+}
+
+function appendTransDelta(t){
+  if(!t) return;
+  ensureEntry();
+  curEntry.trans.textContent+=t;
+  document.getElementById('transcript').scrollTop=99999;
+}
+
+function finishEntry(){
+  curEntry=null;   // 次のフレーズは新しい entry へ
 }
 
 function clearTranscript(){
   document.getElementById('transcript').innerHTML=
     '<p class="hint-text" id="hint">Press <strong>Start</strong> and speak in any language — translation will appear here in real time.</p>';
+  curEntry=null;
 }
 
 // ═══════════════════════════════════════════════
@@ -442,7 +425,6 @@ async function doStart(){
 }
 function doStop(){
   isActive=false; playQueue=[]; isPlaying=false;
-  outPcm16Buf=[]; clearTimeout(whisperTimer);
   stopMic();
   if(ws&&ws.readyState<WebSocket.CLOSING) ws.close(); ws=null;
   playCtx?.close(); playCtx=null;
